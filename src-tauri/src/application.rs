@@ -14,6 +14,8 @@ pub enum RepositoryError {
     Conflict,
     #[error("el registro relacionado no existe")]
     NotFound,
+    #[error("el identificador del evento ya existe con otro contenido")]
+    EventIdConflict,
     #[error("el producto no existe o está inactivo")]
     InactiveProduct,
     #[error("la transición solicitada no es válida para el estado actual")]
@@ -24,8 +26,18 @@ pub enum RepositoryError {
     LocationHierarchyImmutable,
     #[error("la ubicación tiene existencias o dependencias activas")]
     InUse,
+    #[error("la posición de destino ya está ocupada")]
+    PositionOccupied,
+    #[error("el destino no es una posición activa")]
+    InvalidDestination,
     #[error("error de persistencia: {0}")]
     Storage(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventOutcome {
+    Applied,
+    Duplicate,
 }
 
 #[async_trait]
@@ -57,9 +69,10 @@ pub trait InventoryRepository: Send + Sync {
         &self,
         unit: &HandlingUnit,
         event: &MovementEvent,
-    ) -> Result<(), RepositoryError>;
+    ) -> Result<EventOutcome, RepositoryError>;
 
-    async fn record_movement(&self, event: &MovementEvent) -> Result<(), RepositoryError>;
+    async fn record_movement(&self, event: &MovementEvent)
+    -> Result<EventOutcome, RepositoryError>;
 }
 
 #[derive(Debug, Error)]
@@ -101,6 +114,9 @@ impl ApplicationError {
             Self::Repository(RepositoryError::NotFound) => {
                 "No se encontró el producto, ubicación o referencia indicada; no se guardaron cambios."
             }
+            Self::Repository(RepositoryError::EventIdConflict) => {
+                "El identificador del evento ya se usó con datos distintos; no se aplicaron cambios."
+            }
             Self::Repository(RepositoryError::InactiveProduct) => {
                 "El SKU no existe o está inactivo; no se recibió la unidad."
             }
@@ -115,6 +131,12 @@ impl ApplicationError {
             }
             Self::Repository(RepositoryError::InUse) => {
                 "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
+            }
+            Self::Repository(RepositoryError::PositionOccupied) => {
+                "La posición de destino ya está ocupada; no se aplicaron cambios."
+            }
+            Self::Repository(RepositoryError::InvalidDestination) => {
+                "El destino debe ser una posición existente y activa."
             }
             Self::Repository(RepositoryError::Storage(_)) => {
                 "No se pudo completar la operación. No se confirmaron cambios."
@@ -373,7 +395,7 @@ impl ReceiveUnit {
         event_id: &str,
         occurred_at_ms: i64,
         source: &str,
-    ) -> Result<HandlingUnit, ApplicationError> {
+    ) -> Result<EventOutcome, ApplicationError> {
         let lines = lines
             .into_iter()
             .map(|line| HandlingUnitLine::new(line.sku, line.quantity, line.lot_code.as_deref()))
@@ -388,8 +410,7 @@ impl ReceiveUnit {
             occurred_at_ms,
             source,
         )?;
-        self.repository.receive_unit(&unit, &event).await?;
-        Ok(unit)
+        Ok(self.repository.receive_unit(&unit, &event).await?)
     }
 }
 
@@ -409,7 +430,7 @@ impl DispatchUnit {
         origin_location_id: &str,
         occurred_at_ms: i64,
         source: &str,
-    ) -> Result<(), ApplicationError> {
+    ) -> Result<EventOutcome, ApplicationError> {
         let event = MovementEvent::new(
             event_id,
             handling_unit_id,
@@ -419,8 +440,38 @@ impl DispatchUnit {
             occurred_at_ms,
             source,
         )?;
-        self.repository.record_movement(&event).await?;
-        Ok(())
+        Ok(self.repository.record_movement(&event).await?)
+    }
+}
+
+pub struct MoveUnit {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl MoveUnit {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        event_id: &str,
+        handling_unit_id: &str,
+        origin_location_id: &str,
+        destination_location_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+    ) -> Result<EventOutcome, ApplicationError> {
+        let event = MovementEvent::new(
+            event_id,
+            handling_unit_id,
+            MovementKind::Moved,
+            Some(origin_location_id),
+            Some(destination_location_id),
+            occurred_at_ms,
+            source,
+        )?;
+        Ok(self.repository.record_movement(&event).await?)
     }
 }
 
@@ -500,12 +551,15 @@ mod tests {
             &self,
             _unit: &HandlingUnit,
             _event: &MovementEvent,
-        ) -> Result<(), RepositoryError> {
+        ) -> Result<EventOutcome, RepositoryError> {
             Err(RepositoryError::Storage("not used by this fake".to_owned()))
         }
 
-        async fn record_movement(&self, _event: &MovementEvent) -> Result<(), RepositoryError> {
-            Ok(())
+        async fn record_movement(
+            &self,
+            _event: &MovementEvent,
+        ) -> Result<EventOutcome, RepositoryError> {
+            Ok(EventOutcome::Applied)
         }
     }
 

@@ -2,14 +2,14 @@ use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use sqlx::{
-    Row, SqlitePool,
+    Row, Sqlite, SqlitePool, Transaction,
     migrate::Migrator,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow},
 };
 use thiserror::Error;
 
 use crate::{
-    application::{InventoryRepository, RepositoryError},
+    application::{EventOutcome, InventoryRepository, RepositoryError},
     domain::{
         HandlingUnit, HandlingUnitStatus, Location, LocationKind, MovementEvent, MovementKind,
         Product, Sku,
@@ -240,7 +240,7 @@ impl InventoryRepository for SqliteInventoryRepository {
         &self,
         unit: &HandlingUnit,
         event: &MovementEvent,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<EventOutcome, RepositoryError> {
         if unit.status != HandlingUnitStatus::Received
             || unit.current_location_id.is_some()
             || unit.lines.is_empty()
@@ -252,7 +252,51 @@ impl InventoryRepository for SqliteInventoryRepository {
             return Err(RepositoryError::InvalidTransition);
         }
 
-        let mut transaction = self.pool.begin().await.map_err(map_repository_error)?;
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_repository_error)?;
+
+        if let Some(previous_event) =
+            event_payload_for_id(&mut transaction, &event.event_id).await?
+        {
+            let previous_label =
+                sqlx::query_scalar::<_, String>("SELECT label FROM handling_units WHERE id = ?")
+                    .bind(&unit.id)
+                    .fetch_optional(&mut *transaction)
+                    .await
+                    .map_err(map_repository_error)?;
+            let previous_lines = sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT product_sku, lot_code, quantity FROM handling_unit_lines WHERE handling_unit_id = ? ORDER BY product_sku, lot_code",
+            )
+            .bind(&unit.id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(map_repository_error)?;
+            let mut expected_lines: Vec<(String, String, i64)> = unit
+                .lines
+                .iter()
+                .map(|line| {
+                    (
+                        line.sku.as_str().to_owned(),
+                        line.lot_code.clone().unwrap_or_default(),
+                        i64::from(line.quantity),
+                    )
+                })
+                .collect();
+            expected_lines.sort();
+            let payload_matches = movement_payload_matches(&previous_event, event)
+                && previous_label.as_deref() == Some(unit.label.as_str())
+                && previous_lines == expected_lines;
+            if payload_matches {
+                transaction.commit().await.map_err(map_repository_error)?;
+                return Ok(EventOutcome::Duplicate);
+            }
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::EventIdConflict);
+        }
+
         let result = async {
             for line in &unit.lines {
                 let product_active = sqlx::query_scalar::<_, i64>(
@@ -316,11 +360,33 @@ impl InventoryRepository for SqliteInventoryRepository {
             let _ = transaction.rollback().await;
             return Err(error);
         }
-        transaction.commit().await.map_err(map_repository_error)
+        transaction
+            .commit()
+            .await
+            .map(|()| EventOutcome::Applied)
+            .map_err(map_repository_error)
     }
 
-    async fn record_movement(&self, event: &MovementEvent) -> Result<(), RepositoryError> {
-        let mut transaction = self.pool.begin().await.map_err(map_repository_error)?;
+    async fn record_movement(
+        &self,
+        event: &MovementEvent,
+    ) -> Result<EventOutcome, RepositoryError> {
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_repository_error)?;
+
+        if let Some(previous_event) =
+            event_payload_for_id(&mut transaction, &event.event_id).await?
+        {
+            if movement_payload_matches(&previous_event, event) {
+                transaction.commit().await.map_err(map_repository_error)?;
+                return Ok(EventOutcome::Duplicate);
+            }
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::EventIdConflict);
+        }
 
         let current = sqlx::query_as::<_, (String, Option<String>)>(
             "SELECT status, current_location_id FROM handling_units WHERE id = ?",
@@ -386,8 +452,36 @@ impl InventoryRepository for SqliteInventoryRepository {
             return Err(map_repository_error(error));
         }
 
-        transaction.commit().await.map_err(map_repository_error)
+        transaction
+            .commit()
+            .await
+            .map(|()| EventOutcome::Applied)
+            .map_err(map_repository_error)
     }
+}
+
+type StoredEventPayload = (String, String, Option<String>, Option<String>, i64, String);
+
+async fn event_payload_for_id(
+    transaction: &mut Transaction<'_, Sqlite>,
+    event_id: &str,
+) -> Result<Option<StoredEventPayload>, RepositoryError> {
+    sqlx::query_as::<_, StoredEventPayload>(
+        "SELECT handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source FROM movement_events WHERE event_id = ?",
+    )
+    .bind(event_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(map_repository_error)
+}
+
+fn movement_payload_matches(previous: &StoredEventPayload, event: &MovementEvent) -> bool {
+    previous.0 == event.handling_unit_id
+        && previous.1 == event.kind.as_str()
+        && previous.2 == event.origin_location_id
+        && previous.3 == event.destination_location_id
+        && previous.4 == event.occurred_at_ms
+        && previous.5 == event.source
 }
 
 fn now_ms() -> i64 {
@@ -497,23 +591,30 @@ fn transition_target(
 }
 
 fn map_repository_error(error: sqlx::Error) -> RepositoryError {
-    if error
-        .as_database_error()
-        .is_some_and(|database_error| database_error.is_unique_violation())
-    {
-        RepositoryError::Conflict
-    } else if error
-        .as_database_error()
-        .is_some_and(|database_error| database_error.is_foreign_key_violation())
-    {
-        RepositoryError::NotFound
-    } else if let Some(database_error) = error.as_database_error() {
-        match database_error.message() {
-            "invalid_location_hierarchy" => RepositoryError::InvalidLocationHierarchy,
-            "location_parent_is_immutable" => RepositoryError::LocationHierarchyImmutable,
-            "location_occupied" | "location_has_active_children" => RepositoryError::InUse,
-            _ => RepositoryError::Storage(error.to_string()),
+    let Some(database_error) = error.as_database_error() else {
+        return RepositoryError::Storage(error.to_string());
+    };
+    let message = database_error.message();
+    if database_error.is_unique_violation() {
+        if message.contains("movement_events.event_id") {
+            RepositoryError::EventIdConflict
+        } else if message.contains("handling_units.current_location_id") {
+            RepositoryError::PositionOccupied
+        } else {
+            RepositoryError::Conflict
         }
+    } else if database_error.is_foreign_key_violation() {
+        RepositoryError::NotFound
+    } else if message.contains("invalid_location_hierarchy") {
+        RepositoryError::InvalidLocationHierarchy
+    } else if message.contains("location_parent_is_immutable") {
+        RepositoryError::LocationHierarchyImmutable
+    } else if message.contains("location_occupied")
+        || message.contains("location_has_active_children")
+    {
+        RepositoryError::InUse
+    } else if message.contains("handling_unit_location_must_be_active_position") {
+        RepositoryError::InvalidDestination
     } else {
         RepositoryError::Storage(error.to_string())
     }
@@ -524,8 +625,8 @@ mod tests {
     use super::*;
     use crate::application::{
         CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
-        GetLocation, GetProduct, InventoryRepository, ListLocations, ListProducts, ReceiveLine,
-        ReceiveUnit, UpdateLocation, UpdateProduct,
+        EventOutcome, GetLocation, GetProduct, InventoryRepository, ListLocations, ListProducts,
+        MoveUnit, ReceiveLine, ReceiveUnit, UpdateLocation, UpdateProduct,
     };
     use crate::domain::{MovementKind, Sku};
     use std::sync::Arc;
@@ -913,7 +1014,7 @@ mod tests {
             .execute("SKU-RECEIPT-2", "Segundo producto", "unidad")
             .await
             .unwrap();
-        let unit = ReceiveUnit::new(repository.clone())
+        let outcome = ReceiveUnit::new(repository.clone())
             .execute(
                 "unit-received",
                 "PALLET-RECEIVED",
@@ -927,8 +1028,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(unit.status, HandlingUnitStatus::Received);
-        assert_eq!(unit.current_location_id, None);
+        assert_eq!(outcome, EventOutcome::Applied);
 
         let persisted_unit: (String, Option<String>) = sqlx::query_as(
             "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-received'",
@@ -1041,7 +1141,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_receipt_event_rolls_back_unit_and_lines() {
+    async fn duplicate_receipt_event_is_idempotent_and_rejects_conflicting_payloads() {
         let database = SqliteDatabase::in_memory().await.unwrap();
         let pool = database.pool();
         let repository: Arc<dyn InventoryRepository> =
@@ -1051,17 +1151,35 @@ mod tests {
             .await
             .unwrap();
         let receipt = ReceiveUnit::new(repository.clone());
-        receipt
-            .execute(
-                "unit-first",
-                "PALLET-FIRST",
-                vec![receipt_line("SKU-RECEIPT", 1, None)],
-                "receipt-event-1",
-                1_800_000_000_000,
-                "manual",
-            )
-            .await
-            .unwrap();
+        assert_eq!(
+            receipt
+                .execute(
+                    "unit-first",
+                    "PALLET-FIRST",
+                    vec![receipt_line("SKU-RECEIPT", 1, None)],
+                    "receipt-event-1",
+                    1_800_000_000_000,
+                    "manual",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Applied
+        );
+
+        assert_eq!(
+            receipt
+                .execute(
+                    "unit-first",
+                    "PALLET-FIRST",
+                    vec![receipt_line("SKU-RECEIPT", 1, None)],
+                    "receipt-event-1",
+                    1_800_000_000_000,
+                    "manual",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Duplicate
+        );
 
         assert!(matches!(
             receipt
@@ -1075,7 +1193,7 @@ mod tests {
                 )
                 .await,
             Err(crate::application::ApplicationError::Repository(
-                RepositoryError::Conflict
+                RepositoryError::EventIdConflict
             ))
         ));
         let partial_units: i64 =
@@ -1437,23 +1555,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_event_rolls_back_the_unit_update() {
+    async fn duplicate_movement_event_is_idempotent_and_conflicts_do_not_mutate_state() {
         let database = SqliteDatabase::in_memory().await.unwrap();
         let pool = database.pool();
         insert_location_tree(pool).await;
         sqlx::query("INSERT INTO handling_units (id, label, status) VALUES ('unit-1', 'PALLET-1', 'received')")
             .execute(pool).await.unwrap();
         let repository = SqliteInventoryRepository::new(&database);
-        repository
-            .record_movement(&movement(
-                "event-1",
-                "unit-1",
-                MovementKind::Stored,
-                None,
-                Some("position-1"),
-            ))
-            .await
-            .unwrap();
+        assert_eq!(
+            repository
+                .record_movement(&movement(
+                    "event-1",
+                    "unit-1",
+                    MovementKind::Stored,
+                    None,
+                    Some("position-1"),
+                ))
+                .await
+                .unwrap(),
+            EventOutcome::Applied
+        );
+
+        let retry = movement(
+            "event-1",
+            "unit-1",
+            MovementKind::Stored,
+            None,
+            Some("position-1"),
+        );
+        assert_eq!(
+            repository.record_movement(&retry).await.unwrap(),
+            EventOutcome::Duplicate
+        );
 
         let duplicate_id = movement(
             "event-1",
@@ -1464,7 +1597,7 @@ mod tests {
         );
         assert_eq!(
             repository.record_movement(&duplicate_id).await,
-            Err(RepositoryError::Conflict)
+            Err(RepositoryError::EventIdConflict)
         );
         let state: (String, Option<String>) = sqlx::query_as(
             "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-1'",
@@ -1479,6 +1612,476 @@ mod tests {
             .unwrap();
         assert_eq!(event_count, 1);
         database.close().await;
+    }
+
+    #[tokio::test]
+    async fn move_unit_records_origin_destination_and_updates_position() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-MOVE", "Producto", "unidad")
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-move",
+                "PALLET-MOVE",
+                vec![receipt_line("SKU-MOVE", 1, None)],
+                "event-received",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-stored",
+                "unit-move",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            ))
+            .await
+            .unwrap();
+
+        let move_unit = MoveUnit::new(repository.clone());
+        assert_eq!(
+            move_unit
+                .execute(
+                    "event-moved",
+                    "unit-move",
+                    "position-1",
+                    "position-2",
+                    1_800_000_000_003,
+                    "manual",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Applied
+        );
+
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-move'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-2".to_owned())));
+        let event: (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT kind, origin_location_id, destination_location_id FROM movement_events WHERE event_id = 'event-moved'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            event,
+            (
+                "moved".to_owned(),
+                Some("position-1".to_owned()),
+                Some("position-2".to_owned())
+            )
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn move_unit_rejects_stale_origin_occupied_or_inactive_destinations() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-MOVE", "Producto", "unidad")
+            .await
+            .unwrap();
+        let receive = ReceiveUnit::new(repository.clone());
+        receive
+            .execute(
+                "unit-move",
+                "PALLET-MOVE",
+                vec![receipt_line("SKU-MOVE", 1, None)],
+                "event-received-1",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        receive
+            .execute(
+                "unit-occupant",
+                "PALLET-OCCUPANT",
+                vec![receipt_line("SKU-MOVE", 1, None)],
+                "event-received-2",
+                1_800_000_000_001,
+                "manual",
+            )
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-stored-1",
+                "unit-move",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            ))
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-stored-2",
+                "unit-occupant",
+                MovementKind::Stored,
+                None,
+                Some("position-2"),
+            ))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO locations (id, code, name, kind, parent_id) VALUES ('position-3', 'P3', 'Posición 3', 'position', 'rack-1')")
+            .execute(pool).await.unwrap();
+        let move_unit = MoveUnit::new(repository.clone());
+
+        assert!(matches!(
+            move_unit
+                .execute(
+                    "event-stale-origin",
+                    "unit-move",
+                    "position-2",
+                    "position-1",
+                    1_800_000_000_004,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InvalidTransition
+            ))
+        ));
+        assert!(matches!(
+            move_unit
+                .execute(
+                    "event-occupied-destination",
+                    "unit-move",
+                    "position-1",
+                    "position-2",
+                    1_800_000_000_005,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::PositionOccupied
+            ))
+        ));
+
+        sqlx::query("UPDATE locations SET is_active = 0 WHERE id = 'position-3'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(matches!(
+            move_unit
+                .execute(
+                    "event-inactive-destination",
+                    "unit-move",
+                    "position-1",
+                    "position-3",
+                    1_800_000_000_006,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InvalidDestination
+            ))
+        ));
+
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-move'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-1".to_owned())));
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE handling_unit_id = 'unit-move'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 2);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn failed_movement_event_insert_rolls_back_inventory_update() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        sqlx::query("INSERT INTO handling_units (id, label, status, current_location_id) VALUES ('unit-1', 'PALLET-1', 'stored', 'position-1')")
+            .execute(pool).await.unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_movement_insert BEFORE INSERT ON movement_events WHEN NEW.event_id = 'forced-failure' BEGIN SELECT RAISE(ABORT, 'forced_failure'); END",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let repository = SqliteInventoryRepository::new(&database);
+
+        assert!(matches!(
+            repository
+                .record_movement(&movement(
+                    "forced-failure",
+                    "unit-1",
+                    MovementKind::Moved,
+                    Some("position-1"),
+                    Some("position-2"),
+                ))
+                .await,
+            Err(RepositoryError::Storage(_))
+        ));
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-1".to_owned())));
+        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(event_count, 0);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_retry_of_same_movement_returns_applied_and_duplicate() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-concurrent-retry-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = SqliteDatabase::open(&directory.join("ariadna.sqlite3"))
+            .await
+            .unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        sqlx::query("INSERT INTO locations (id, code, name, kind, parent_id) VALUES ('position-3', 'P3', 'Posición 3', 'position', 'rack-1')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO handling_units (id, label, status, current_location_id) VALUES ('unit-1', 'PALLET-1', 'stored', 'position-1')")
+            .execute(pool).await.unwrap();
+        let repository = SqliteInventoryRepository::new(&database);
+        let event = movement(
+            "event-concurrent",
+            "unit-1",
+            MovementKind::Moved,
+            Some("position-1"),
+            Some("position-2"),
+        );
+
+        let (first, second) = tokio::join!(
+            repository.record_movement(&event),
+            repository.record_movement(&event)
+        );
+        assert!(matches!(
+            (first, second),
+            (Ok(EventOutcome::Applied), Ok(EventOutcome::Duplicate))
+                | (Ok(EventOutcome::Duplicate), Ok(EventOutcome::Applied))
+        ));
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'event-concurrent'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 1);
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-2".to_owned())));
+
+        let first_payload = movement(
+            "event-concurrent-conflict",
+            "unit-1",
+            MovementKind::Moved,
+            Some("position-2"),
+            Some("position-1"),
+        );
+        let second_payload = movement(
+            "event-concurrent-conflict",
+            "unit-1",
+            MovementKind::Moved,
+            Some("position-2"),
+            Some("position-3"),
+        );
+        let (first, second) = tokio::join!(
+            repository.record_movement(&first_payload),
+            repository.record_movement(&second_payload)
+        );
+        let outcomes = [first, second];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(result, Ok(EventOutcome::Applied)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(result, Err(RepositoryError::EventIdConflict)))
+                .count(),
+            1
+        );
+        let conflicting_id_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'event-concurrent-conflict'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(conflicting_id_count, 1);
+        database.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_retry_of_same_receipt_creates_one_unit_and_returns_duplicate() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-concurrent-receipt-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = SqliteDatabase::open(&directory.join("ariadna.sqlite3"))
+            .await
+            .unwrap();
+        let pool = database.pool();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-CONCURRENT", "Producto", "unidad")
+            .await
+            .unwrap();
+        let receive = ReceiveUnit::new(repository);
+
+        let (first, second) = tokio::join!(
+            receive.execute(
+                "unit-concurrent",
+                "PALLET-CONCURRENT",
+                vec![receipt_line("SKU-CONCURRENT", 2, Some("LOT-1"))],
+                "receipt-concurrent",
+                1_800_000_000_000,
+                "manual",
+            ),
+            receive.execute(
+                "unit-concurrent",
+                "PALLET-CONCURRENT",
+                vec![receipt_line("SKU-CONCURRENT", 2, Some("LOT-1"))],
+                "receipt-concurrent",
+                1_800_000_000_000,
+                "manual",
+            )
+        );
+        assert!(matches!(
+            (first, second),
+            (Ok(EventOutcome::Applied), Ok(EventOutcome::Duplicate))
+                | (Ok(EventOutcome::Duplicate), Ok(EventOutcome::Applied))
+        ));
+        let units: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM handling_units WHERE id = 'unit-concurrent'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let lines: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_unit_lines WHERE handling_unit_id = 'unit-concurrent'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'receipt-concurrent'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((units, lines, events), (1, 1, 1));
+        database.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_moves_to_same_position_only_allow_one_unit() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-concurrent-position-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database = SqliteDatabase::open(&directory.join("ariadna.sqlite3"))
+            .await
+            .unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        sqlx::query("INSERT INTO locations (id, code, name, kind, parent_id) VALUES ('position-3', 'P3', 'Posición 3', 'position', 'rack-1')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO handling_units (id, label, status, current_location_id) VALUES ('unit-1', 'PALLET-1', 'stored', 'position-1'), ('unit-2', 'PALLET-2', 'stored', 'position-2')")
+            .execute(pool).await.unwrap();
+        let repository = SqliteInventoryRepository::new(&database);
+        let first_event = movement(
+            "event-first-unit",
+            "unit-1",
+            MovementKind::Moved,
+            Some("position-1"),
+            Some("position-3"),
+        );
+        let second_event = movement(
+            "event-second-unit",
+            "unit-2",
+            MovementKind::Moved,
+            Some("position-2"),
+            Some("position-3"),
+        );
+
+        let (first, second) = tokio::join!(
+            repository.record_movement(&first_event),
+            repository.record_movement(&second_event)
+        );
+        let outcomes = [first, second];
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(result, Ok(EventOutcome::Applied)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(result, Err(RepositoryError::PositionOccupied)))
+                .count(),
+            1
+        );
+        let occupant_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_units WHERE current_location_id = 'position-3' AND status = 'stored'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(occupant_count, 1);
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE destination_location_id = 'position-3'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 1);
+        database.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]
