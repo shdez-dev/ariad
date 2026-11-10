@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: línea base de implementación, 9 de noviembre de 2026. Esta matriz interpreta los requisitos de AETHER a la luz de la arquitectura vigente. Los casos de prueba que aparecen aquí son evidencia planificada, no resultados ejecutados.
+Estado: línea base de implementación, 10 de noviembre de 2026. Esta matriz interpreta los requisitos de AETHER a la luz de la arquitectura vigente. Distingue las verificaciones del núcleo ya ejecutadas de los flujos de aceptación pendientes.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -58,4 +58,6 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 
 ## Estado de evidencia
 
-La interfaz TypeScript/Vite y la aplicación nativa Tauri se compilaron correctamente; la ventana inicial fue observada en Windows x64. En este entorno, Smart App Control bloqueó binarios auxiliares de Cargo en el primer intento y después se ajustó el entorno de desarrollo. ARD-02 queda verificada para el arranque. Las pruebas de reglas, persistencia, flujos de inventario y rendimiento siguen pendientes; esta evidencia no representa aceptación funcional del inventario.
+La interfaz TypeScript/Vite se compiló con `npm run build`. En Windows x64, `cargo test --manifest-path src-tauri/Cargo.toml` pasó 20 pruebas del núcleo y Clippy pasó sin advertencias. ARD-03 queda respaldada por la separación de módulos, el puerto de repositorio, configuración de datos locales y adaptación de errores. ARD-04 queda respaldada por pruebas de SKU, jerarquía, ancestros activos, cantidades, ocupación y transiciones. ARD-05 queda respaldada por migraciones, restricciones SQLite, unicidad, integridad referencial, historial append-only, copia de base y rollback transaccional. Se comprobó el camino válido de almacenamiento, traslado y despacho, así como el rechazo de eventos incoherentes sin cambios parciales.
+
+La ventana inicial también fue observada como evidencia de ARD-02. La interfaz aún no ejecuta flujos de inventario mediante IPC; la aceptación de las funciones RF, las pruebas completas de integración y la medición de rendimiento siguen pendientes. Esta evidencia no representa aceptación del sistema en una bodega real.

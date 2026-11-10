@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-La estructura de Tauri v2 y la pantalla inicial están creadas. La compilación de TypeScript/Vite y la compilación nativa terminan correctamente; la ventana Tauri se abrió y se verificó en Windows x64. En el primer intento, Smart App Control bloqueó binarios auxiliares de Cargo (evento Code Integrity 3077); el entorno de desarrollo se ajustó para poder compilar. La pantalla no consulta ni guarda inventario. Dominio, SQLite, comandos IPC y flujos funcionales siguen pendientes según ARD-03 en adelante.
+La aplicación Tauri v2 y la pantalla inicial están creadas. El primer incremento de ARD-03, ARD-04 y ARD-05 añade módulos públicos de dominio, aplicación y SQLite; una migración inicial con claves, restricciones e índices; configuración de datos locales; registro diagnóstico; y pruebas del dominio y de persistencia. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación funcional continúa pendiente.
 
 ## Requisitos del entorno
 
@@ -43,15 +43,26 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 - Rust estable y Tauri v2 para la aplicación de escritorio.
 - HTML, CSS y TypeScript empaquetados como recursos estáticos.
-- Sin comandos IPC registrados todavía. Cuando existan, serán la frontera entre interfaz y casos de uso Rust.
-- SQLite con SQLx es la decisión de persistencia para las siguientes tarjetas; aún no está incorporada al código.
+- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y el caso de uso inicial `CreateProduct`.
+- SQLx 0.9 y SQLite local ejecutan migraciones versionadas al iniciar la aplicación. La carpeta que entrega `app.path().app_data_dir()` contiene `ariadna.sqlite3` y `logs/ariadna.log`.
+- La adaptación de errores separa el mensaje seguro para la interfaz del detalle que se conserva en el registro local.
+- No hay comandos IPC de negocio conectados a pantallas todavía.
 - El simulador y la interfaz deberán invocar los mismos casos de uso. El simulador no hablará por HTTP ni MQTT.
 
 Consulta [la línea base de arquitectura](docs/arquitectura-base.md) y [la matriz de trazabilidad](docs/trazabilidad.md).
 
 ## Trabajo siguiente
 
-1. Cerrar ARD-01 sincronizando los documentos de AETHER con las decisiones técnicas y manteniendo actualizada la matriz de trazabilidad.
-2. Completar ARD-03 definiendo límites de módulos, configuración y manejo de errores.
-3. Implementar el dominio y las migraciones SQLite en ARD-04 y ARD-05.
+1. Conectar persistencia y reglas en los casos de uso de catálogo y ubicaciones (ARD-06).
+2. Implementar recepción y despacho con historial transaccional (ARD-07).
+3. Continuar con traslados, idempotencia y registro inmutable antes de construir las pantallas conectadas.
+
+## Verificación local
+
+```powershell
+npm run build
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+El primer incremento pasó la compilación de interfaz, 20 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, jerarquía y ancestros activos, ocupación, transiciones coherentes, historial inmutable, errores seguros, migraciones, restricciones SQLite, copia de base y rollback conjunto de evento y estado.
 
