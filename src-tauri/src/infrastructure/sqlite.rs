@@ -2,15 +2,15 @@ use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use sqlx::{
-    SqlitePool,
+    Row, SqlitePool,
     migrate::Migrator,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow},
 };
 use thiserror::Error;
 
 use crate::{
     application::{InventoryRepository, RepositoryError},
-    domain::{HandlingUnitStatus, MovementEvent, Product},
+    domain::{HandlingUnitStatus, Location, LocationKind, MovementEvent, Product, Sku},
 };
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -90,10 +90,7 @@ impl SqliteInventoryRepository {
 #[async_trait]
 impl InventoryRepository for SqliteInventoryRepository {
     async fn insert_product(&self, product: &Product) -> Result<(), RepositoryError> {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now_ms = now_ms();
         sqlx::query(
             "INSERT INTO products (sku, description, unit_of_measure, is_active, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?)",
         )
@@ -106,6 +103,133 @@ impl InventoryRepository for SqliteInventoryRepository {
         .execute(&self.pool)
         .await
         .map_err(map_repository_error)?;
+        Ok(())
+    }
+
+    async fn find_product(&self, sku: &Sku) -> Result<Option<Product>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT sku, description, unit_of_measure, is_active FROM products WHERE sku = ?",
+        )
+        .bind(sku.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        row.map(product_from_row).transpose()
+    }
+
+    async fn list_products(&self, include_inactive: bool) -> Result<Vec<Product>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT sku, description, unit_of_measure, is_active FROM products WHERE (? = 1 OR is_active = 1) ORDER BY sku COLLATE NOCASE",
+        )
+        .bind(include_inactive)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        rows.into_iter().map(product_from_row).collect()
+    }
+
+    async fn update_product(&self, product: &Product) -> Result<(), RepositoryError> {
+        let result = sqlx::query(
+            "UPDATE products SET description = ?, unit_of_measure = ?, updated_at_ms = ? WHERE sku = ?",
+        )
+        .bind(&product.description)
+        .bind(&product.unit_of_measure)
+        .bind(now_ms())
+        .bind(product.sku.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn deactivate_product(&self, sku: &Sku) -> Result<(), RepositoryError> {
+        let result =
+            sqlx::query("UPDATE products SET is_active = 0, updated_at_ms = ? WHERE sku = ?")
+                .bind(now_ms())
+                .bind(sku.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(map_repository_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn insert_location(&self, location: &Location) -> Result<(), RepositoryError> {
+        let now = now_ms();
+        sqlx::query(
+            "INSERT INTO locations (id, code, name, kind, parent_id, is_active, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&location.id)
+        .bind(&location.code)
+        .bind(&location.name)
+        .bind(location.kind.as_str())
+        .bind(&location.parent_id)
+        .bind(location.active)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        Ok(())
+    }
+
+    async fn find_location(&self, id: &str) -> Result<Option<Location>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT id, code, name, kind, parent_id, is_active FROM locations WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        row.map(location_from_row).transpose()
+    }
+
+    async fn list_locations(
+        &self,
+        include_inactive: bool,
+    ) -> Result<Vec<Location>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT id, code, name, kind, parent_id, is_active FROM locations WHERE (? = 1 OR is_active = 1) ORDER BY CASE kind WHEN 'zone' THEN 0 WHEN 'aisle' THEN 1 WHEN 'rack' THEN 2 ELSE 3 END, parent_id, code COLLATE NOCASE",
+        )
+        .bind(include_inactive)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        rows.into_iter().map(location_from_row).collect()
+    }
+
+    async fn update_location(&self, location: &Location) -> Result<(), RepositoryError> {
+        let result =
+            sqlx::query("UPDATE locations SET code = ?, name = ?, updated_at_ms = ? WHERE id = ?")
+                .bind(&location.code)
+                .bind(&location.name)
+                .bind(now_ms())
+                .bind(&location.id)
+                .execute(&self.pool)
+                .await
+                .map_err(map_repository_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+        Ok(())
+    }
+
+    async fn deactivate_location(&self, id: &str) -> Result<(), RepositoryError> {
+        let result =
+            sqlx::query("UPDATE locations SET is_active = 0, updated_at_ms = ? WHERE id = ?")
+                .bind(now_ms())
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(map_repository_error)?;
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound);
+        }
         Ok(())
     }
 
@@ -180,6 +304,71 @@ impl InventoryRepository for SqliteInventoryRepository {
     }
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn product_from_row(row: SqliteRow) -> Result<Product, RepositoryError> {
+    let sku = Sku::new(
+        row.try_get::<String, _>("sku")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+    )
+    .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+    Ok(Product {
+        sku,
+        description: row
+            .try_get("description")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        unit_of_measure: row
+            .try_get("unit_of_measure")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        active: row
+            .try_get::<i64, _>("is_active")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?
+            != 0,
+    })
+}
+
+fn location_from_row(row: SqliteRow) -> Result<Location, RepositoryError> {
+    let kind = match row
+        .try_get::<String, _>("kind")
+        .map_err(|error| RepositoryError::Storage(error.to_string()))?
+        .as_str()
+    {
+        "zone" => LocationKind::Zone,
+        "aisle" => LocationKind::Aisle,
+        "rack" => LocationKind::Rack,
+        "position" => LocationKind::Position,
+        other => {
+            return Err(RepositoryError::Storage(format!(
+                "tipo de ubicación desconocido: {other}"
+            )));
+        }
+    };
+    Ok(Location {
+        id: row
+            .try_get("id")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        code: row
+            .try_get("code")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        name: row
+            .try_get("name")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        kind,
+        parent_id: row
+            .try_get("parent_id")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+        active: row
+            .try_get::<i64, _>("is_active")
+            .map_err(|error| RepositoryError::Storage(error.to_string()))?
+            != 0,
+    })
+}
+
 fn transition_target(
     event: &MovementEvent,
     current_status: HandlingUnitStatus,
@@ -232,6 +421,13 @@ fn map_repository_error(error: sqlx::Error) -> RepositoryError {
         .is_some_and(|database_error| database_error.is_foreign_key_violation())
     {
         RepositoryError::NotFound
+    } else if let Some(database_error) = error.as_database_error() {
+        match database_error.message() {
+            "invalid_location_hierarchy" => RepositoryError::InvalidLocationHierarchy,
+            "location_parent_is_immutable" => RepositoryError::LocationHierarchyImmutable,
+            "location_occupied" | "location_has_active_children" => RepositoryError::InUse,
+            _ => RepositoryError::Storage(error.to_string()),
+        }
     } else {
         RepositoryError::Storage(error.to_string())
     }
@@ -240,7 +436,13 @@ fn map_repository_error(error: sqlx::Error) -> RepositoryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::{
+        CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, GetLocation,
+        GetProduct, InventoryRepository, ListLocations, ListProducts, UpdateLocation,
+        UpdateProduct,
+    };
     use crate::domain::{MovementKind, Sku};
+    use std::sync::Arc;
 
     async fn insert_location_tree(pool: &SqlitePool) {
         sqlx::query(
@@ -276,6 +478,304 @@ mod tests {
             "simulator",
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn product_catalog_use_cases_create_query_update_and_deactivate() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+
+        let created = CreateProduct::new(repository.clone())
+            .execute(" sku-100 ", " Caja", " unidad ")
+            .await
+            .unwrap();
+        assert_eq!(created.sku.as_str(), "SKU-100");
+        assert_eq!(
+            GetProduct::new(repository.clone())
+                .execute("sku-100")
+                .await
+                .unwrap(),
+            Some(created.clone())
+        );
+        assert!(matches!(
+            CreateProduct::new(repository.clone())
+                .execute("SKU-100", "Duplicado", "unidad")
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::Conflict
+            ))
+        ));
+
+        let updated = UpdateProduct::new(repository.clone())
+            .execute("SKU-100", "Caja reforzada", "caja")
+            .await
+            .unwrap();
+        assert_eq!(updated.description, "Caja reforzada");
+        let listed_active = ListProducts::new(repository.clone())
+            .execute(false)
+            .await
+            .unwrap();
+        assert_eq!(listed_active.len(), 1);
+        assert_eq!(listed_active[0], updated);
+
+        let inactive = DeactivateProduct::new(repository.clone())
+            .execute("SKU-100")
+            .await
+            .unwrap();
+        assert!(!inactive.active);
+        assert!(
+            ListProducts::new(repository.clone())
+                .execute(false)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let listed_all = ListProducts::new(repository.clone())
+            .execute(true)
+            .await
+            .unwrap();
+        assert_eq!(listed_all.len(), 1);
+        assert_eq!(listed_all[0], inactive);
+        assert_eq!(
+            GetProduct::new(repository)
+                .execute("SKU-100")
+                .await
+                .unwrap(),
+            Some(inactive)
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn location_use_cases_validate_hierarchy_and_persist_updates() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        let create = CreateLocation::new(repository.clone());
+        let zone = create
+            .execute("z1", "Z1", "Zona", LocationKind::Zone, None)
+            .await
+            .unwrap();
+        let aisle = create
+            .execute("a1", "A1", "Pasillo", LocationKind::Aisle, Some("z1"))
+            .await
+            .unwrap();
+        let rack = create
+            .execute("r1", "R1", "Rack", LocationKind::Rack, Some("a1"))
+            .await
+            .unwrap();
+        let rack_2 = create
+            .execute("r2", "R2", "Rack 2", LocationKind::Rack, Some("a1"))
+            .await
+            .unwrap();
+        create
+            .execute("p1", "P1", "Posición", LocationKind::Position, Some("r1"))
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            create
+                .execute("bad", "BAD", "Pasillo sin padre", LocationKind::Aisle, None)
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::InvalidLocationHierarchy
+            ))
+        ));
+        assert!(matches!(
+            create
+                .execute(
+                    "bad-rack",
+                    "BR",
+                    "Rack bajo zona",
+                    LocationKind::Rack,
+                    Some("z1")
+                )
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::InvalidLocationHierarchy
+            ))
+        ));
+        assert!(matches!(
+            create
+                .execute(
+                    "missing-parent",
+                    "MP",
+                    "Posición",
+                    LocationKind::Position,
+                    Some("no-such-rack")
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::NotFound
+            ))
+        ));
+        assert!(matches!(
+            create
+                .execute(
+                    "duplicate",
+                    "Z1",
+                    "Código duplicado",
+                    LocationKind::Zone,
+                    None
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::Conflict
+            ))
+        ));
+
+        let renamed = UpdateLocation::new(repository.clone())
+            .execute("p1", "P1-A", "Posición actualizada")
+            .await
+            .unwrap();
+        assert_eq!(renamed.parent_id.as_deref(), Some("r1"));
+        assert_eq!(
+            GetLocation::new(repository.clone())
+                .execute("p1")
+                .await
+                .unwrap(),
+            Some(renamed.clone())
+        );
+        sqlx::query("INSERT INTO handling_units (id, label, status) VALUES ('unit-history', 'PALLET-HISTORY', 'dispatched')")
+            .execute(database.pool()).await.unwrap();
+        sqlx::query("INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, occurred_at_ms, source) VALUES ('event-history', 'unit-history', 'dispatched', 'p1', 1800000000000, 'test')")
+            .execute(database.pool()).await.unwrap();
+        let reparent_error = sqlx::query("UPDATE locations SET parent_id = ? WHERE id = 'p1'")
+            .bind(&rack_2.id)
+            .execute(database.pool())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            map_repository_error(reparent_error),
+            RepositoryError::LocationHierarchyImmutable
+        );
+        let parent_id: String =
+            sqlx::query_scalar("SELECT parent_id FROM locations WHERE id = 'p1'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(parent_id, "r1");
+        let historical_event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'event-history' AND origin_location_id = 'p1'",
+        ).fetch_one(database.pool()).await.unwrap();
+        assert_eq!(historical_event_count, 1);
+        let active_locations = ListLocations::new(repository.clone())
+            .execute(false)
+            .await
+            .unwrap();
+        assert_eq!(active_locations.len(), 5);
+        assert_eq!(active_locations[0], zone);
+        assert_eq!(active_locations[1], aisle);
+        assert!(active_locations.contains(&rack));
+        assert!(active_locations.contains(&renamed));
+
+        let inactive_zone = create
+            .execute("z2", "Z2", "Zona temporal", LocationKind::Zone, None)
+            .await
+            .unwrap();
+        create
+            .execute(
+                "a2",
+                "A2",
+                "Pasillo temporal",
+                LocationKind::Aisle,
+                Some("z2"),
+            )
+            .await
+            .unwrap();
+        DeactivateLocation::new(repository.clone())
+            .execute("a2")
+            .await
+            .unwrap();
+        DeactivateLocation::new(repository.clone())
+            .execute(&inactive_zone.id)
+            .await
+            .unwrap();
+        let edited_archived_child = UpdateLocation::new(repository.clone())
+            .execute("a2", "A2-OLD", "Pasillo archivado")
+            .await
+            .unwrap();
+        assert!(!edited_archived_child.active);
+        assert_eq!(edited_archived_child.parent_id.as_deref(), Some("z2"));
+        assert!(matches!(
+            create
+                .execute(
+                    "a3",
+                    "A3",
+                    "Bajo zona inactiva",
+                    LocationKind::Aisle,
+                    Some("z2")
+                )
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::InactiveLocationParent
+            ))
+        ));
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn deactivation_preserves_referenced_rows_and_blocks_active_location_dependencies() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        insert_location_tree(pool).await;
+        let product = CreateProduct::new(repository.clone())
+            .execute("SKU-REF", "Producto referenciado", "unidad")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO handling_units (id, label, status) VALUES ('unit-ref', 'PALLET-REF', 'received')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO handling_unit_lines (handling_unit_id, product_sku, lot_code, quantity) VALUES ('unit-ref', ?, '', 1)")
+            .bind(product.sku.as_str()).execute(pool).await.unwrap();
+
+        let deactivated = DeactivateProduct::new(repository.clone())
+            .execute(product.sku.as_str())
+            .await
+            .unwrap();
+        assert!(!deactivated.active);
+        let referenced_product_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM handling_unit_lines WHERE product_sku = ?")
+                .bind(product.sku.as_str())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(referenced_product_count, 1);
+
+        assert!(matches!(
+            DeactivateLocation::new(repository.clone())
+                .execute("rack-1")
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InUse
+            ))
+        ));
+        sqlx::query("INSERT INTO handling_units (id, label, status) VALUES ('unit-out', 'PALLET-OUT', 'dispatched')")
+            .execute(pool).await.unwrap();
+        sqlx::query("INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, occurred_at_ms, source) VALUES ('event-ref', 'unit-out', 'dispatched', 'position-1', 1800000000000, 'test')")
+            .execute(pool).await.unwrap();
+        let deactivated_position = DeactivateLocation::new(repository.clone())
+            .execute("position-1")
+            .await
+            .unwrap();
+        assert!(!deactivated_position.active);
+        let historic_location_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE origin_location_id = 'position-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(historic_location_count, 1);
+        assert!(
+            GetLocation::new(repository.clone())
+                .execute("position-1")
+                .await
+                .unwrap()
+                .is_some_and(|location| !location.active)
+        );
+        database.close().await;
     }
 
     #[tokio::test]

@@ -19,13 +19,13 @@ Estado: línea base de implementación, 10 de noviembre de 2026. Esta decisión 
 
 `src-tauri/src/domain.rs` contiene SKU, productos, ubicaciones, unidades de manipulación, líneas, eventos y alertas, además de sus validaciones e invariantes. No importa Tauri ni SQLx.
 
-`src-tauri/src/application.rs` define el puerto asíncrono `InventoryRepository`, errores de aplicación y el caso de uso `CreateProduct`. Los mensajes destinados a la interfaz son seguros y la función adaptadora conserva el detalle técnico en el registro local.
+`src-tauri/src/application.rs` define el puerto asíncrono `InventoryRepository`, errores de aplicación y casos de uso para crear, consultar, listar, actualizar y desactivar productos y ubicaciones. Al crear una ubicación se carga y valida su padre. La relación jerárquica queda fija después del alta para que los movimientos históricos no cambien de contexto; las actualizaciones posteriores modifican código y nombre, incluso en registros inactivos.
 
-`src-tauri/src/infrastructure/sqlite.rs` implementa el puerto de persistencia, apertura de SQLite, migraciones y escritura transaccional de movimiento más estado de la unidad. Las consultas usan parámetros.
+`src-tauri/src/infrastructure/sqlite.rs` implementa el puerto de persistencia, apertura de SQLite, migraciones, operaciones de catálogo y ubicaciones, consultas con inclusión opcional de entidades inactivas y escritura transaccional de movimiento más estado de la unidad. Los SKU y códigos únicos se normalizan o restringen mediante el dominio y el esquema. Los registros referenciados se conservan y se desactivan; ubicaciones con descendientes activos o posiciones ocupadas no se desactivan. Un trigger impide cambiar el padre de una ubicación ya creada. Las consultas usan parámetros.
 
 `src-tauri/src/config.rs` deriva las rutas desde `app.path().app_data_dir()`. La base predeterminada es `ariadna.sqlite3`; el registro diagnóstico es `logs/ariadna.log`. Las carpetas se crean si faltan.
 
-La migración `src-tauri/migrations/0001_initial_inventory.sql` crea productos, ubicaciones jerárquicas, unidades, líneas, historial y alertas. Incluye restricciones de SKU, etiqueta y evento; claves foráneas; índices de consulta; validación jerárquica y de ancestros activos; una restricción única para que una posición no tenga dos unidades activas; y triggers que hacen append-only el historial de movimientos.
+La migración `src-tauri/migrations/0001_initial_inventory.sql` crea productos, ubicaciones jerárquicas, unidades, líneas, historial y alertas. Incluye restricciones de SKU, etiqueta y evento; claves foráneas; índices de consulta; validación jerárquica y de ancestros activos; una restricción única para que una posición no tenga dos unidades activas; un trigger que conserva inmutable la relación padre; y triggers que hacen append-only el historial de movimientos.
 
 La persistencia deriva el nuevo estado de la unidad desde el movimiento solicitado y el estado leído dentro de la transacción. Valida origen, destino, estado previo y tipo de movimiento; actualiza unidad e historial como una sola operación. Si el evento no coincide, ya existe o falla una restricción, se revierte la transacción.
 
@@ -41,7 +41,7 @@ npm run tauri dev
 
 La interfaz TypeScript/Vite y la aplicación Tauri se compilaron correctamente. La ventana inicial se abrió en Windows x64 y mostró la pantalla de arranque. En el primer intento, Smart App Control bloqueó auxiliares de Cargo; el entorno se ajustó para completar la compilación.
 
-ARD-03 a ARD-05 tienen una base ejecutable y pruebas de módulos, dominio y migraciones. No hay aún comandos IPC de inventario conectados a la interfaz ni pantallas funcionales de catálogo, mapa, recepción, traslados, despacho, búsqueda o simulación. Las pruebas locales verifican reglas y persistencia, pero no representan una operación real ni rendimiento en una bodega.
+ARD-03 a ARD-06 tienen una base ejecutable y pruebas de módulos, dominio, catálogo, ubicaciones y migraciones. Los casos de uso de catálogo y ubicaciones ya persisten cambios y permiten consultar los resultados. No hay aún comandos IPC de inventario conectados a la interfaz ni pantallas funcionales de catálogo, mapa, recepción, traslados, despacho, búsqueda o simulación. Las pruebas locales verifican reglas y persistencia, pero no representan una operación real ni rendimiento en una bodega.
 
-Verificación ejecutada el 10 de noviembre de 2026: `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml` (20 pruebas) y `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`; todos pasan.
+Verificación ejecutada el 10 de noviembre de 2026: `npm run build`, `cargo test --manifest-path src-tauri/Cargo.toml` (23 pruebas) y `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings`; todos pasan.
 

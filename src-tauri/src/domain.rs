@@ -137,6 +137,12 @@ impl Location {
         let id = required(id.as_ref(), "identificador de ubicación")?;
         let code = required(code.as_ref(), "código de ubicación")?;
         let name = required(name.as_ref(), "nombre de ubicación")?;
+        if code.len() > 64 {
+            return Err(DomainError::FieldTooLong("código de ubicación"));
+        }
+        if name.len() > 120 {
+            return Err(DomainError::FieldTooLong("nombre de ubicación"));
+        }
         let expected_parent = match kind {
             LocationKind::Zone => None,
             LocationKind::Aisle => Some(LocationKind::Zone),
@@ -168,6 +174,24 @@ impl Location {
 
     pub fn deactivate(&mut self) {
         self.active = false;
+    }
+
+    pub fn update_details(
+        &mut self,
+        code: impl AsRef<str>,
+        name: impl AsRef<str>,
+    ) -> Result<(), DomainError> {
+        let code = required(code.as_ref(), "código de ubicación")?;
+        let name = required(name.as_ref(), "nombre de ubicación")?;
+        if code.len() > 64 {
+            return Err(DomainError::FieldTooLong("código de ubicación"));
+        }
+        if name.len() > 120 {
+            return Err(DomainError::FieldTooLong("nombre de ubicación"));
+        }
+        self.code = code;
+        self.name = name;
+        Ok(())
     }
 }
 

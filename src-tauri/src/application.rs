@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::domain::{DomainError, MovementEvent, Product};
+use crate::domain::{DomainError, Location, LocationKind, MovementEvent, Product, Sku};
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -13,6 +13,12 @@ pub enum RepositoryError {
     NotFound,
     #[error("la transición solicitada no es válida para el estado actual")]
     InvalidTransition,
+    #[error("la jerarquía de ubicación no es válida")]
+    InvalidLocationHierarchy,
+    #[error("la relación jerárquica es inmutable para conservar el historial")]
+    LocationHierarchyImmutable,
+    #[error("la ubicación tiene existencias o dependencias activas")]
+    InUse,
     #[error("error de persistencia: {0}")]
     Storage(String),
 }
@@ -20,6 +26,27 @@ pub enum RepositoryError {
 #[async_trait]
 pub trait InventoryRepository: Send + Sync {
     async fn insert_product(&self, product: &Product) -> Result<(), RepositoryError>;
+
+    async fn find_product(&self, sku: &Sku) -> Result<Option<Product>, RepositoryError>;
+
+    async fn list_products(&self, include_inactive: bool) -> Result<Vec<Product>, RepositoryError>;
+
+    async fn update_product(&self, product: &Product) -> Result<(), RepositoryError>;
+
+    async fn deactivate_product(&self, sku: &Sku) -> Result<(), RepositoryError>;
+
+    async fn insert_location(&self, location: &Location) -> Result<(), RepositoryError>;
+
+    async fn find_location(&self, id: &str) -> Result<Option<Location>, RepositoryError>;
+
+    async fn list_locations(
+        &self,
+        include_inactive: bool,
+    ) -> Result<Vec<Location>, RepositoryError>;
+
+    async fn update_location(&self, location: &Location) -> Result<(), RepositoryError>;
+
+    async fn deactivate_location(&self, id: &str) -> Result<(), RepositoryError>;
 
     async fn record_movement(&self, event: &MovementEvent) -> Result<(), RepositoryError>;
 }
@@ -35,15 +62,39 @@ pub enum ApplicationError {
 impl ApplicationError {
     pub fn user_message(&self) -> &'static str {
         match self {
+            Self::Domain(DomainError::InvalidSku) => {
+                "El SKU solo admite letras, números, guion, guion bajo o punto."
+            }
+            Self::Domain(DomainError::InvalidLocationHierarchy) => {
+                "El nivel y la ubicación padre no forman una jerarquía válida."
+            }
+            Self::Domain(DomainError::InactiveLocationParent) => {
+                "No se puede crear una ubicación bajo un padre inactivo."
+            }
+            Self::Domain(DomainError::EmptyField(field)) => match *field {
+                "SKU" => "El SKU es obligatorio.",
+                "código de ubicación" => "El código de ubicación es obligatorio.",
+                "nombre de ubicación" => "El nombre de ubicación es obligatorio.",
+                _ => "Completa los campos obligatorios.",
+            },
             Self::Domain(_) => "Revisa los datos ingresados y el estado actual del inventario.",
             Self::Repository(RepositoryError::Conflict) => {
-                "El registro ya existe y no se guardaron cambios."
+                "El SKU, código o identificador ya existe; no se guardaron cambios."
             }
             Self::Repository(RepositoryError::NotFound) => {
-                "No se encontró un registro relacionado; no se guardaron cambios."
+                "No se encontró el producto, ubicación o referencia indicada; no se guardaron cambios."
             }
             Self::Repository(RepositoryError::InvalidTransition) => {
                 "El movimiento no es válido para el estado actual; no se guardaron cambios."
+            }
+            Self::Repository(RepositoryError::InvalidLocationHierarchy) => {
+                "El nivel y la ubicación padre no forman una jerarquía válida."
+            }
+            Self::Repository(RepositoryError::LocationHierarchyImmutable) => {
+                "La relación jerárquica se conserva para proteger el historial; actualiza el código o el nombre."
+            }
+            Self::Repository(RepositoryError::InUse) => {
+                "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
             }
             Self::Repository(RepositoryError::Storage(_)) => {
                 "No se pudo completar la operación. No se confirmaron cambios."
@@ -70,6 +121,210 @@ impl CreateProduct {
         let product = Product::new(sku, description, unit_of_measure)?;
         self.repository.insert_product(&product).await?;
         Ok(product)
+    }
+}
+
+pub struct GetProduct {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl GetProduct {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, sku: &str) -> Result<Option<Product>, ApplicationError> {
+        let sku = Sku::new(sku)?;
+        Ok(self.repository.find_product(&sku).await?)
+    }
+}
+
+pub struct ListProducts {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl ListProducts {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, include_inactive: bool) -> Result<Vec<Product>, ApplicationError> {
+        Ok(self.repository.list_products(include_inactive).await?)
+    }
+}
+
+pub struct UpdateProduct {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl UpdateProduct {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        sku: &str,
+        description: &str,
+        unit_of_measure: &str,
+    ) -> Result<Product, ApplicationError> {
+        let sku = Sku::new(sku)?;
+        let existing = self
+            .repository
+            .find_product(&sku)
+            .await?
+            .ok_or(RepositoryError::NotFound)?;
+        let mut updated = Product::new(sku.as_str(), description, unit_of_measure)?;
+        updated.active = existing.active;
+        self.repository.update_product(&updated).await?;
+        Ok(updated)
+    }
+}
+
+pub struct DeactivateProduct {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl DeactivateProduct {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, sku: &str) -> Result<Product, ApplicationError> {
+        let sku = Sku::new(sku)?;
+        let mut product = self
+            .repository
+            .find_product(&sku)
+            .await?
+            .ok_or(RepositoryError::NotFound)?;
+        self.repository.deactivate_product(&sku).await?;
+        product.deactivate();
+        Ok(product)
+    }
+}
+
+pub struct CreateLocation {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl CreateLocation {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        id: &str,
+        code: &str,
+        name: &str,
+        kind: LocationKind,
+        parent_id: Option<&str>,
+    ) -> Result<Location, ApplicationError> {
+        let parent = match parent_id {
+            Some(parent_id) => self
+                .repository
+                .find_location(parent_id)
+                .await?
+                .ok_or(RepositoryError::NotFound)?,
+            None => return self.create_root(id, code, name, kind).await,
+        };
+        let location = Location::new(id, code, name, kind, Some(&parent))?;
+        self.repository.insert_location(&location).await?;
+        Ok(location)
+    }
+
+    async fn create_root(
+        &self,
+        id: &str,
+        code: &str,
+        name: &str,
+        kind: LocationKind,
+    ) -> Result<Location, ApplicationError> {
+        let location = Location::new(id, code, name, kind, None)?;
+        self.repository.insert_location(&location).await?;
+        Ok(location)
+    }
+}
+
+pub struct GetLocation {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl GetLocation {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, id: &str) -> Result<Option<Location>, ApplicationError> {
+        if id.trim().is_empty() {
+            return Err(DomainError::EmptyField("identificador de ubicación").into());
+        }
+        Ok(self.repository.find_location(id.trim()).await?)
+    }
+}
+
+pub struct ListLocations {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl ListLocations {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, include_inactive: bool) -> Result<Vec<Location>, ApplicationError> {
+        Ok(self.repository.list_locations(include_inactive).await?)
+    }
+}
+
+pub struct UpdateLocation {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl UpdateLocation {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        id: &str,
+        code: &str,
+        name: &str,
+    ) -> Result<Location, ApplicationError> {
+        if id.trim().is_empty() {
+            return Err(DomainError::EmptyField("identificador de ubicación").into());
+        }
+        let existing = self
+            .repository
+            .find_location(id.trim())
+            .await?
+            .ok_or(RepositoryError::NotFound)?;
+        let mut updated = existing;
+        updated.update_details(code, name)?;
+        self.repository.update_location(&updated).await?;
+        Ok(updated)
+    }
+}
+
+pub struct DeactivateLocation {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl DeactivateLocation {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, id: &str) -> Result<Location, ApplicationError> {
+        let mut location = self
+            .repository
+            .find_location(id.trim())
+            .await?
+            .ok_or(RepositoryError::NotFound)?;
+        self.repository.deactivate_location(id.trim()).await?;
+        location.deactivate();
+        Ok(location)
     }
 }
 
@@ -101,6 +356,48 @@ mod tests {
                 .unwrap()
                 .push(product.sku.as_str().to_owned());
             Ok(())
+        }
+
+        async fn find_product(&self, _sku: &Sku) -> Result<Option<Product>, RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn list_products(
+            &self,
+            _include_inactive: bool,
+        ) -> Result<Vec<Product>, RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn update_product(&self, _product: &Product) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn deactivate_product(&self, _sku: &Sku) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn insert_location(&self, _location: &Location) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn find_location(&self, _id: &str) -> Result<Option<Location>, RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn list_locations(
+            &self,
+            _include_inactive: bool,
+        ) -> Result<Vec<Location>, RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn update_location(&self, _location: &Location) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn deactivate_location(&self, _id: &str) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
         }
 
         async fn record_movement(&self, _event: &MovementEvent) -> Result<(), RepositoryError> {
@@ -138,6 +435,18 @@ mod tests {
             "No se pudo completar la operación. No se confirmaron cambios."
         );
         assert!(!error.user_message().contains("sqlite"));
+        assert_eq!(
+            ApplicationError::Domain(DomainError::InvalidLocationHierarchy).user_message(),
+            "El nivel y la ubicación padre no forman una jerarquía válida."
+        );
+        assert_eq!(
+            ApplicationError::Repository(RepositoryError::Conflict).user_message(),
+            "El SKU, código o identificador ya existe; no se guardaron cambios."
+        );
+        assert_eq!(
+            ApplicationError::Repository(RepositoryError::InUse).user_message(),
+            "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
+        );
     }
 
     #[test]
