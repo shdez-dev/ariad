@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-06 añaden módulos públicos de dominio y aplicación, operaciones de catálogo y ubicaciones, persistencia SQLite con migración inicial, configuración de datos locales, registro diagnóstico y pruebas de reglas e integración. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación de flujos gráficos continúa pendiente.
+La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-07 añaden módulos públicos de dominio y aplicación, operaciones de catálogo y ubicaciones, recepción y despacho con persistencia SQLite, configuración local y registro diagnóstico. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación de flujos gráficos continúa pendiente.
 
 ## Requisitos del entorno
 
@@ -53,9 +53,9 @@ Consulta [la línea base de arquitectura](docs/arquitectura-base.md) y [la matri
 
 ## Trabajo siguiente
 
-1. Implementar recepción y despacho con historial transaccional (ARD-07).
-2. Continuar con los movimientos y escenarios simulados del backlog.
-3. Después, exponer los casos de uso mediante IPC y conectarlos con las pantallas previstas.
+1. Implementar traslados, capacidad e idempotencia (ARD-08).
+2. Completar historial y correcciones (ARD-09).
+3. Exponer los casos de uso mediante IPC (ARD-10) y conectarlos con las pantallas previstas.
 
 ## Verificación local
 
@@ -64,5 +64,5 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-El incremento actual pasó la compilación de interfaz, 23 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, operaciones de catálogo y ubicaciones, jerarquía y ancestros activos, ocupación, desactivación sin borrar referencias, padre de ubicación inmutable para proteger el contexto del historial, edición de registros archivados, transiciones coherentes, historial inmutable, errores seguros, migraciones, restricciones SQLite, copia de base y rollback conjunto de evento y estado.
+El incremento actual pasó la compilación de interfaz, 28 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, operaciones de catálogo y ubicaciones, jerarquía y ancestros activos, ocupación, desactivación sin borrar referencias, recepción atómica de unidad/líneas/evento, SKU y cantidades inválidas, despacho con liberación de posición, padre de ubicación inmutable, transiciones coherentes, historial inmutable, migraciones, copia de base y rollback sin cambios parciales.
 

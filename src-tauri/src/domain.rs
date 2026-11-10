@@ -261,6 +261,9 @@ impl HandlingUnit {
         }
         let id = required(id.as_ref(), "identificador de unidad")?;
         let label = required(label.as_ref(), "etiqueta de unidad")?;
+        if label.len() > 120 {
+            return Err(DomainError::FieldTooLong("etiqueta de unidad"));
+        }
         let mut seen_lines = HashSet::new();
         for line in &lines {
             if !seen_lines.insert((line.sku.as_str().to_owned(), line.lot_code.clone())) {

@@ -3,7 +3,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use crate::domain::{DomainError, Location, LocationKind, MovementEvent, Product, Sku};
+use crate::domain::{
+    DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementEvent,
+    MovementKind, Product, Sku,
+};
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -11,6 +14,8 @@ pub enum RepositoryError {
     Conflict,
     #[error("el registro relacionado no existe")]
     NotFound,
+    #[error("el producto no existe o está inactivo")]
+    InactiveProduct,
     #[error("la transición solicitada no es válida para el estado actual")]
     InvalidTransition,
     #[error("la jerarquía de ubicación no es válida")]
@@ -48,6 +53,12 @@ pub trait InventoryRepository: Send + Sync {
 
     async fn deactivate_location(&self, id: &str) -> Result<(), RepositoryError>;
 
+    async fn receive_unit(
+        &self,
+        unit: &HandlingUnit,
+        event: &MovementEvent,
+    ) -> Result<(), RepositoryError>;
+
     async fn record_movement(&self, event: &MovementEvent) -> Result<(), RepositoryError>;
 }
 
@@ -77,12 +88,21 @@ impl ApplicationError {
                 "nombre de ubicación" => "El nombre de ubicación es obligatorio.",
                 _ => "Completa los campos obligatorios.",
             },
+            Self::Domain(DomainError::FieldTooLong("etiqueta de unidad")) => {
+                "La etiqueta de la unidad no puede superar 120 caracteres."
+            }
+            Self::Domain(DomainError::FieldTooLong(_)) => {
+                "Uno de los campos ingresados supera la longitud permitida."
+            }
             Self::Domain(_) => "Revisa los datos ingresados y el estado actual del inventario.",
             Self::Repository(RepositoryError::Conflict) => {
                 "El SKU, código o identificador ya existe; no se guardaron cambios."
             }
             Self::Repository(RepositoryError::NotFound) => {
                 "No se encontró el producto, ubicación o referencia indicada; no se guardaron cambios."
+            }
+            Self::Repository(RepositoryError::InactiveProduct) => {
+                "El SKU no existe o está inactivo; no se recibió la unidad."
             }
             Self::Repository(RepositoryError::InvalidTransition) => {
                 "El movimiento no es válido para el estado actual; no se guardaron cambios."
@@ -328,6 +348,82 @@ impl DeactivateLocation {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReceiveLine {
+    pub sku: String,
+    pub quantity: u32,
+    pub lot_code: Option<String>,
+}
+
+pub struct ReceiveUnit {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl ReceiveUnit {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute(
+        &self,
+        id: &str,
+        label: &str,
+        lines: Vec<ReceiveLine>,
+        event_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+    ) -> Result<HandlingUnit, ApplicationError> {
+        let lines = lines
+            .into_iter()
+            .map(|line| HandlingUnitLine::new(line.sku, line.quantity, line.lot_code.as_deref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let unit = HandlingUnit::new(id, label, lines)?;
+        let event = MovementEvent::new(
+            event_id,
+            &unit.id,
+            MovementKind::Received,
+            None::<&str>,
+            None::<&str>,
+            occurred_at_ms,
+            source,
+        )?;
+        self.repository.receive_unit(&unit, &event).await?;
+        Ok(unit)
+    }
+}
+
+pub struct DispatchUnit {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl DispatchUnit {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        event_id: &str,
+        handling_unit_id: &str,
+        origin_location_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+    ) -> Result<(), ApplicationError> {
+        let event = MovementEvent::new(
+            event_id,
+            handling_unit_id,
+            MovementKind::Dispatched,
+            Some(origin_location_id),
+            None::<&str>,
+            occurred_at_ms,
+            source,
+        )?;
+        self.repository.record_movement(&event).await?;
+        Ok(())
+    }
+}
+
 pub fn map_error_for_ui(
     diagnostic_log: &crate::diagnostic_log::DiagnosticLog,
     operation: &str,
@@ -397,6 +493,14 @@ mod tests {
         }
 
         async fn deactivate_location(&self, _id: &str) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn receive_unit(
+            &self,
+            _unit: &HandlingUnit,
+            _event: &MovementEvent,
+        ) -> Result<(), RepositoryError> {
             Err(RepositoryError::Storage("not used by this fake".to_owned()))
         }
 

@@ -10,7 +10,10 @@ use thiserror::Error;
 
 use crate::{
     application::{InventoryRepository, RepositoryError},
-    domain::{HandlingUnitStatus, Location, LocationKind, MovementEvent, Product, Sku},
+    domain::{
+        HandlingUnit, HandlingUnitStatus, Location, LocationKind, MovementEvent, MovementKind,
+        Product, Sku,
+    },
 };
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -233,6 +236,89 @@ impl InventoryRepository for SqliteInventoryRepository {
         Ok(())
     }
 
+    async fn receive_unit(
+        &self,
+        unit: &HandlingUnit,
+        event: &MovementEvent,
+    ) -> Result<(), RepositoryError> {
+        if unit.status != HandlingUnitStatus::Received
+            || unit.current_location_id.is_some()
+            || unit.lines.is_empty()
+            || event.kind != MovementKind::Received
+            || event.handling_unit_id != unit.id
+            || event.origin_location_id.is_some()
+            || event.destination_location_id.is_some()
+        {
+            return Err(RepositoryError::InvalidTransition);
+        }
+
+        let mut transaction = self.pool.begin().await.map_err(map_repository_error)?;
+        let result = async {
+            for line in &unit.lines {
+                let product_active = sqlx::query_scalar::<_, i64>(
+                    "SELECT is_active FROM products WHERE sku = ?",
+                )
+                .bind(line.sku.as_str())
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(map_repository_error)?
+                .ok_or(RepositoryError::NotFound)?;
+                if product_active == 0 {
+                    return Err(RepositoryError::InactiveProduct);
+                }
+                if line.quantity == 0 {
+                    return Err(RepositoryError::Storage(
+                        "cantidad de línea inválida en unidad de recepción".to_owned(),
+                    ));
+                }
+            }
+
+            sqlx::query(
+                "INSERT INTO handling_units (id, label, status, current_location_id, created_at_ms, updated_at_ms) VALUES (?, ?, 'received', NULL, ?, ?)",
+            )
+            .bind(&unit.id)
+            .bind(&unit.label)
+            .bind(event.occurred_at_ms)
+            .bind(event.occurred_at_ms)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_repository_error)?;
+
+            for line in &unit.lines {
+                sqlx::query(
+                    "INSERT INTO handling_unit_lines (handling_unit_id, product_sku, lot_code, quantity) VALUES (?, ?, ?, ?)",
+                )
+                .bind(&unit.id)
+                .bind(line.sku.as_str())
+                .bind(line.lot_code.as_deref().unwrap_or(""))
+                .bind(i64::from(line.quantity))
+                .execute(&mut *transaction)
+                .await
+                .map_err(map_repository_error)?;
+            }
+
+            sqlx::query(
+                "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result) VALUES (?, ?, 'received', NULL, NULL, ?, ?, 'accepted')",
+            )
+            .bind(&event.event_id)
+            .bind(&unit.id)
+            .bind(event.occurred_at_ms)
+            .bind(&event.source)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_repository_error)?;
+
+            Ok::<(), RepositoryError>(())
+        }
+        .await;
+
+        if let Err(error) = result {
+            let _ = transaction.rollback().await;
+            return Err(error);
+        }
+        transaction.commit().await.map_err(map_repository_error)
+    }
+
     async fn record_movement(&self, event: &MovementEvent) -> Result<(), RepositoryError> {
         let mut transaction = self.pool.begin().await.map_err(map_repository_error)?;
 
@@ -437,9 +523,9 @@ fn map_repository_error(error: sqlx::Error) -> RepositoryError {
 mod tests {
     use super::*;
     use crate::application::{
-        CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, GetLocation,
-        GetProduct, InventoryRepository, ListLocations, ListProducts, UpdateLocation,
-        UpdateProduct,
+        CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
+        GetLocation, GetProduct, InventoryRepository, ListLocations, ListProducts, ReceiveLine,
+        ReceiveUnit, UpdateLocation, UpdateProduct,
     };
     use crate::domain::{MovementKind, Sku};
     use std::sync::Arc;
@@ -478,6 +564,14 @@ mod tests {
             "simulator",
         )
         .unwrap()
+    }
+
+    fn receipt_line(sku: &str, quantity: u32, lot_code: Option<&str>) -> ReceiveLine {
+        ReceiveLine {
+            sku: sku.to_owned(),
+            quantity,
+            lot_code: lot_code.map(str::to_owned),
+        }
     }
 
     #[tokio::test]
@@ -775,6 +869,378 @@ mod tests {
                 .unwrap()
                 .is_some_and(|location| !location.active)
         );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn receipt_creates_unit_lines_and_event_atomically() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-RECEIPT", "Producto recibido", "unidad")
+            .await
+            .unwrap();
+
+        let received = ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-received",
+                "PALLET-RECEIVED",
+                vec![
+                    receipt_line("SKU-RECEIPT", 12, Some("LOT-1")),
+                    receipt_line("SKU-RECEIPT-2", 2, None),
+                ],
+                "receipt-event-1",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await;
+        assert!(matches!(
+            received,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::NotFound
+            ))
+        ));
+        let missing_sku_unit_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM handling_units WHERE id = 'unit-received'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(missing_sku_unit_count, 0);
+
+        CreateProduct::new(repository.clone())
+            .execute("SKU-RECEIPT-2", "Segundo producto", "unidad")
+            .await
+            .unwrap();
+        let unit = ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-received",
+                "PALLET-RECEIVED",
+                vec![
+                    receipt_line("SKU-RECEIPT", 12, Some("LOT-1")),
+                    receipt_line("SKU-RECEIPT-2", 2, None),
+                ],
+                "receipt-event-1",
+                1_800_000_000_001,
+                "manual",
+            )
+            .await
+            .unwrap();
+        assert_eq!(unit.status, HandlingUnitStatus::Received);
+        assert_eq!(unit.current_location_id, None);
+
+        let persisted_unit: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-received'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(persisted_unit, ("received".to_owned(), None));
+        let lines: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_unit_lines WHERE handling_unit_id = 'unit-received'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(lines, 2);
+        let event: (String, String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT kind, result, origin_location_id, destination_location_id FROM movement_events WHERE event_id = 'receipt-event-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            event,
+            ("received".to_owned(), "accepted".to_owned(), None, None)
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn receipt_rejects_invalid_quantity_and_inactive_sku() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-INACTIVE", "Producto", "unidad")
+            .await
+            .unwrap();
+        DeactivateProduct::new(repository.clone())
+            .execute("SKU-INACTIVE")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            ReceiveUnit::new(repository.clone())
+                .execute(
+                    "unit-zero",
+                    "PALLET-ZERO",
+                    vec![receipt_line("SKU-INACTIVE", 0, None)],
+                    "event-zero",
+                    1_800_000_000_000,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::QuantityMustBePositive
+            ))
+        ));
+        assert!(matches!(
+            ReceiveUnit::new(repository.clone())
+                .execute(
+                    "unit-inactive",
+                    "PALLET-INACTIVE",
+                    vec![receipt_line("SKU-INACTIVE", 1, None)],
+                    "event-inactive",
+                    1_800_000_000_000,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InactiveProduct
+            ))
+        ));
+        let long_label = "L".repeat(121);
+        assert!(matches!(
+            ReceiveUnit::new(repository.clone())
+                .execute(
+                    "unit-long-label",
+                    &long_label,
+                    vec![receipt_line("SKU-INACTIVE", 1, None)],
+                    "event-long-label",
+                    1_800_000_000_000,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::FieldTooLong("etiqueta de unidad")
+            ))
+        ));
+        assert!(matches!(
+            ReceiveUnit::new(repository.clone())
+                .execute(
+                    "unit-invalid-sku",
+                    "PALLET-INVALID-SKU",
+                    vec![receipt_line("SKU WITH SPACE", 1, None)],
+                    "event-invalid-sku",
+                    1_800_000_000_000,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Domain(
+                crate::domain::DomainError::InvalidSku
+            ))
+        ));
+        let units: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM handling_units")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(units, 0);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn duplicate_receipt_event_rolls_back_unit_and_lines() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-RECEIPT", "Producto recibido", "unidad")
+            .await
+            .unwrap();
+        let receipt = ReceiveUnit::new(repository.clone());
+        receipt
+            .execute(
+                "unit-first",
+                "PALLET-FIRST",
+                vec![receipt_line("SKU-RECEIPT", 1, None)],
+                "receipt-event-1",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            receipt
+                .execute(
+                    "unit-second",
+                    "PALLET-SECOND",
+                    vec![receipt_line("SKU-RECEIPT", 3, None)],
+                    "receipt-event-1",
+                    1_800_000_000_001,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::Conflict
+            ))
+        ));
+        let partial_units: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM handling_units WHERE id = 'unit-second'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let partial_lines: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_unit_lines WHERE handling_unit_id = 'unit-second'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(partial_units, 0);
+        assert_eq!(partial_lines, 0);
+        assert_eq!(event_count, 1);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_releases_position_and_preserves_receipt_history_and_lines() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-DISPATCH", "Producto", "unidad")
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-dispatch",
+                "PALLET-DISPATCH",
+                vec![receipt_line("SKU-DISPATCH", 5, None)],
+                "event-received",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-stored",
+                "unit-dispatch",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            ))
+            .await
+            .unwrap();
+
+        DispatchUnit::new(repository.clone())
+            .execute(
+                "event-dispatched",
+                "unit-dispatch",
+                "position-1",
+                1_800_000_000_002,
+                "manual",
+            )
+            .await
+            .unwrap();
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-dispatch'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("dispatched".to_owned(), None));
+        let history: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE handling_unit_id = 'unit-dispatch'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(history, 3);
+        let line_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_unit_lines WHERE handling_unit_id = 'unit-dispatch'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(line_count, 1);
+
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-next",
+                "PALLET-NEXT",
+                vec![receipt_line("SKU-DISPATCH", 1, None)],
+                "event-next-received",
+                1_800_000_000_003,
+                "manual",
+            )
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-next-stored",
+                "unit-next",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            ))
+            .await
+            .unwrap();
+        let position_units: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_units WHERE current_location_id = 'position-1' AND status = 'stored'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(position_units, 1);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_unit_that_is_not_stored_without_mutating_it() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-DISPATCH", "Producto", "unidad")
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-received",
+                "PALLET-RECEIVED",
+                vec![receipt_line("SKU-DISPATCH", 1, None)],
+                "event-received",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            DispatchUnit::new(repository.clone())
+                .execute(
+                    "event-invalid-dispatch",
+                    "unit-received",
+                    "position-1",
+                    1_800_000_000_001,
+                    "manual"
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InvalidTransition
+            ))
+        ));
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-received'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(state, ("received".to_owned(), None));
+        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_events")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(event_count, 1);
         database.close().await;
     }
 
