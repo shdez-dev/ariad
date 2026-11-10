@@ -18,12 +18,14 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.9", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tauri = { version = "2", features = [] }
 thiserror = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+serde_json = "1"
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1

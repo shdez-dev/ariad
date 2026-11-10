@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-09 añaden módulos de dominio y aplicación, catálogo y ubicaciones, recepción, despacho y traslados con persistencia SQLite, idempotencia, historial cronológico y correcciones trazables. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación de flujos gráficos continúa pendiente.
+La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-09 añaden módulos de dominio y aplicación, catálogo y ubicaciones, recepción, despacho y traslados con persistencia SQLite, idempotencia, historial cronológico y correcciones trazables. ARD-10 registra los comandos IPC de catálogo, ubicaciones, unidades, recepción, traslados, despacho, correcciones e historial, junto con DTO serializables y un contrato TypeScript. Las pantallas aún no consumen esos comandos; la validación de ejecución real del puente y la aceptación de flujos gráficos siguen pendientes.
 
 ## Requisitos del entorno
 
@@ -43,24 +43,28 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 - Rust estable y Tauri v2 para la aplicación de escritorio.
 - HTML, CSS y TypeScript empaquetados como recursos estáticos.
-- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y el caso de uso inicial `CreateProduct`.
+- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y casos de uso para catálogo, ubicaciones, recepción, movimientos, despacho, consulta de unidades e historial.
 - SQLx 0.9 y SQLite local ejecutan migraciones versionadas al iniciar la aplicación. La carpeta que entrega `app.path().app_data_dir()` contiene `ariadna.sqlite3` y `logs/ariadna.log`.
-- La adaptación de errores separa el mensaje seguro para la interfaz del detalle que se conserva en el registro local.
-- No hay comandos IPC de negocio conectados a pantallas todavía.
+- `src-tauri/src/ipc.rs` registra adaptadores delgados con Tauri v2. Usan DTO JSON `camelCase`, códigos de error estables y mensajes seguros; los detalles técnicos quedan en el log local.
+- `src/lib/ipc.ts` contiene las funciones tipadas `invoke` para el frontend. La fuente del evento la fija Rust; el frontend conserva el ID y la fecha UTC al reintentar la misma intención para respetar la idempotencia.
+- No hay API HTTP de negocio ni permisos generales de shell, filesystem o red habilitados.
 - El simulador y la interfaz deberán invocar los mismos casos de uso. El simulador no hablará por HTTP ni MQTT.
 
-Consulta [la línea base de arquitectura](docs/arquitectura-base.md) y [la matriz de trazabilidad](docs/trazabilidad.md).
+Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md) y la [matriz de trazabilidad](docs/trazabilidad.md).
 
 ## Trabajo siguiente
 
-1. Exponer los casos de uso mediante IPC (ARD-10) y conectarlos con las pantallas previstas.
+1. Completar ARD-10 con una verificación de ejecución del puente IPC.
+2. Implementar ARD-11, la consulta de jerarquía y ocupación que alimentará el mapa lógico.
 
 ## Verificación local
 
 ```powershell
 npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-El incremento actual pasó la compilación de interfaz, 37 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, catálogo y ubicaciones, recepción y despacho, traslados y capacidad, idempotencia secuencial y concurrente, intentos rechazados, reconstrucción cronológica del historial, correcciones vinculadas sin mutación de stock, protecciones append-only, rollback y migraciones sobre bases limpias y copias.
+ARD-03 a ARD-09 están publicadas. ARD-10 está en curso en `feat/ard-10-tauri-ipc`. La compilación TypeScript/Vite, las 41 pruebas Rust, `cargo fmt --check` y Clippy pasan sin advertencias. Las pruebas cubren dominio, catálogo, ubicaciones, consultas de unidad por ID/etiqueta, movimientos, idempotencia, historial, correcciones, serialización de DTO, nombres camelCase y errores seguros. La interacción real con una ventana y la aceptación visual siguen pendientes.
 

@@ -86,6 +86,16 @@ pub trait InventoryRepository: Send + Sync {
 
     async fn deactivate_location(&self, id: &str) -> Result<(), RepositoryError>;
 
+    async fn find_handling_unit(
+        &self,
+        id_or_label: &str,
+    ) -> Result<Option<HandlingUnit>, RepositoryError>;
+
+    async fn list_handling_units(
+        &self,
+        include_dispatched: bool,
+    ) -> Result<Vec<HandlingUnit>, RepositoryError>;
+
     async fn receive_unit(
         &self,
         unit: &HandlingUnit,
@@ -390,6 +400,47 @@ pub struct DeactivateLocation {
     repository: Arc<dyn InventoryRepository>,
 }
 
+pub struct GetHandlingUnit {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl GetHandlingUnit {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        id_or_label: &str,
+    ) -> Result<Option<HandlingUnit>, ApplicationError> {
+        let id_or_label = id_or_label.trim();
+        if id_or_label.is_empty() {
+            return Err(DomainError::EmptyField("identificador o etiqueta de unidad").into());
+        }
+        Ok(self.repository.find_handling_unit(id_or_label).await?)
+    }
+}
+
+pub struct ListHandlingUnits {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl ListHandlingUnits {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        include_dispatched: bool,
+    ) -> Result<Vec<HandlingUnit>, ApplicationError> {
+        Ok(self
+            .repository
+            .list_handling_units(include_dispatched)
+            .await?)
+    }
+}
+
 impl DeactivateLocation {
     pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
         Self { repository }
@@ -635,6 +686,20 @@ mod tests {
         }
 
         async fn deactivate_location(&self, _id: &str) -> Result<(), RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn find_handling_unit(
+            &self,
+            _id_or_label: &str,
+        ) -> Result<Option<HandlingUnit>, RepositoryError> {
+            Err(RepositoryError::Storage("not used by this fake".to_owned()))
+        }
+
+        async fn list_handling_units(
+            &self,
+            _include_dispatched: bool,
+        ) -> Result<Vec<HandlingUnit>, RepositoryError> {
             Err(RepositoryError::Storage("not used by this fake".to_owned()))
         }
 

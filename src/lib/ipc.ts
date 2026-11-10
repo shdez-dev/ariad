@@ -1,0 +1,183 @@
+import { invoke } from "@tauri-apps/api/core";
+
+export type ProductDto = {
+  sku: string;
+  description: string;
+  unitOfMeasure: string;
+  active: boolean;
+};
+
+export type LocationKind = "zone" | "aisle" | "rack" | "position";
+
+export type LocationDto = {
+  id: string;
+  code: string;
+  name: string;
+  kind: LocationKind;
+  parentId: string | null;
+  active: boolean;
+};
+
+export type HandlingUnitLineDto = {
+  sku: string;
+  quantity: number;
+  lotCode: string | null;
+};
+
+export type HandlingUnitDto = {
+  id: string;
+  label: string;
+  status: "received" | "stored" | "dispatched";
+  currentLocationId: string | null;
+  lines: HandlingUnitLineDto[];
+};
+
+export type MovementOutcome = "applied" | "duplicate";
+
+export type MovementWriteDto = {
+  eventId: string;
+  outcome: MovementOutcome;
+};
+
+export type CorrectionWriteDto = {
+  correctionId: string;
+  outcome: MovementOutcome;
+};
+
+export type MovementHistoryEntryDto = {
+  recordId: string;
+  eventId: string;
+  handlingUnitId: string;
+  kind: string;
+  originLocationId: string | null;
+  destinationLocationId: string | null;
+  occurredAtMs: number;
+  recordedAtMs: number;
+  source: string;
+  result: string;
+  rejectionReason: string | null;
+  correctsEventId: string | null;
+  correctionReason: string | null;
+};
+
+export type IpcErrorCode =
+  | "validation"
+  | "conflict"
+  | "not_found"
+  | "event_id_conflict"
+  | "inactive_product"
+  | "invalid_transition"
+  | "invalid_location_hierarchy"
+  | "location_hierarchy_immutable"
+  | "in_use"
+  | "position_occupied"
+  | "invalid_destination"
+  | "correction_reference_mismatch"
+  | "correction_before_original"
+  | "storage";
+
+type IpcErrorPayload = {
+  code: IpcErrorCode;
+  message: string;
+};
+
+export class AriadnaIpcError extends Error {
+  readonly code: IpcErrorCode;
+
+  constructor(payload: IpcErrorPayload) {
+    super(payload.message);
+    this.name = "AriadnaIpcError";
+    this.code = payload.code;
+  }
+}
+
+function isIpcErrorPayload(value: unknown): value is IpcErrorPayload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<IpcErrorPayload>;
+  return typeof candidate.code === "string" && typeof candidate.message === "string";
+}
+
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error: unknown) {
+    if (isIpcErrorPayload(error)) throw new AriadnaIpcError(error);
+    if (error instanceof Error) throw error;
+    throw new Error("No se pudo completar la comunicación con Ariadna.");
+  }
+}
+
+export function newEventId(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+export function newEventMetadata(): { eventId: string; occurredAtMs: number } {
+  return { eventId: newEventId(), occurredAtMs: Date.now() };
+}
+
+export type ReceiveLineInput = {
+  sku: string;
+  quantity: number;
+  lotCode?: string | null;
+};
+
+export const inventoryIpc = {
+  createProduct: (input: Omit<ProductDto, "active">) =>
+    call<ProductDto>("create_product", input),
+  getProduct: (sku: string) => call<ProductDto | null>("get_product", { sku }),
+  listProducts: (includeInactive = false) =>
+    call<ProductDto[]>("list_products", { includeInactive }),
+  updateProduct: (input: Omit<ProductDto, "active">) =>
+    call<ProductDto>("update_product", input),
+  deactivateProduct: (sku: string) =>
+    call<ProductDto>("deactivate_product", { sku }),
+
+  createLocation: (input: {
+    id: string;
+    code: string;
+    name: string;
+    kind: LocationKind;
+    parentId?: string | null;
+  }) => call<LocationDto>("create_location", input),
+  getLocation: (id: string) => call<LocationDto | null>("get_location", { id }),
+  listLocations: (includeInactive = false) =>
+    call<LocationDto[]>("list_locations", { includeInactive }),
+  updateLocation: (input: { id: string; code: string; name: string }) =>
+    call<LocationDto>("update_location", input),
+  deactivateLocation: (id: string) =>
+    call<LocationDto>("deactivate_location", { id }),
+
+  getHandlingUnit: (identifier: string) =>
+    call<HandlingUnitDto | null>("get_handling_unit", { identifier }),
+  listHandlingUnits: (includeDispatched = false) =>
+    call<HandlingUnitDto[]>("list_handling_units", { includeDispatched }),
+  receiveUnit: (input: {
+    id: string;
+    label: string;
+    lines: ReceiveLineInput[];
+    eventId: string;
+    occurredAtMs: number;
+  }) => call<MovementWriteDto>("receive_unit", input),
+  moveUnit: (input: {
+    eventId: string;
+    handlingUnitId: string;
+    originLocationId: string;
+    destinationLocationId: string;
+    occurredAtMs: number;
+  }) => call<MovementWriteDto>("move_unit", input),
+  dispatchUnit: (input: {
+    eventId: string;
+    handlingUnitId: string;
+    originLocationId: string;
+    occurredAtMs: number;
+  }) => call<MovementWriteDto>("dispatch_unit", input),
+  recordMovementCorrection: (input: {
+    correctionId: string;
+    handlingUnitId: string;
+    correctsEventId: string;
+    reason: string;
+    occurredAtMs: number;
+  }) => call<CorrectionWriteDto>("record_movement_correction", input),
+  getMovementHistory: (handlingUnitId: string) =>
+    call<MovementHistoryEntryDto[]>("get_movement_history", { handlingUnitId }),
+};

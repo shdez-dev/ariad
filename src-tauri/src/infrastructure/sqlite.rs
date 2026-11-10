@@ -11,8 +11,8 @@ use thiserror::Error;
 use crate::{
     application::{EventOutcome, InventoryRepository, MovementHistoryEntry, RepositoryError},
     domain::{
-        HandlingUnit, HandlingUnitStatus, Location, LocationKind, MovementCorrection,
-        MovementEvent, MovementKind, Product, Sku,
+        HandlingUnit, HandlingUnitLine, HandlingUnitStatus, Location, LocationKind,
+        MovementCorrection, MovementEvent, MovementKind, Product, Sku,
     },
 };
 
@@ -87,6 +87,91 @@ impl SqliteInventoryRepository {
         Self {
             pool: database.pool().clone(),
         }
+    }
+
+    async fn query_handling_units(
+        &self,
+        id_or_label: Option<&str>,
+        include_dispatched: bool,
+    ) -> Result<Vec<HandlingUnit>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT unit.id, unit.label, unit.status, unit.current_location_id, line.product_sku, line.lot_code, line.quantity FROM handling_units AS unit LEFT JOIN handling_unit_lines AS line ON line.handling_unit_id = unit.id WHERE (? IS NULL OR unit.id = ? OR unit.label = ? COLLATE NOCASE) AND (? = 1 OR unit.status <> 'dispatched') ORDER BY CASE WHEN unit.id = ? THEN 0 ELSE 1 END, unit.label COLLATE NOCASE, unit.id, line.product_sku COLLATE NOCASE, line.lot_code",
+        )
+        .bind(id_or_label)
+        .bind(id_or_label)
+        .bind(id_or_label)
+        .bind(include_dispatched)
+        .bind(id_or_label)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+
+        let mut units: Vec<HandlingUnit> = Vec::new();
+        for row in rows {
+            let id: String = row
+                .try_get("id")
+                .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+            if units.last().map(|unit| unit.id.as_str()) != Some(id.as_str()) {
+                let status = match row
+                    .try_get::<String, _>("status")
+                    .map_err(|error| RepositoryError::Storage(error.to_string()))?
+                    .as_str()
+                {
+                    "received" => HandlingUnitStatus::Received,
+                    "stored" => HandlingUnitStatus::Stored,
+                    "dispatched" => HandlingUnitStatus::Dispatched,
+                    other => {
+                        return Err(RepositoryError::Storage(format!(
+                            "estado de unidad desconocido: {other}"
+                        )));
+                    }
+                };
+                units.push(HandlingUnit {
+                    id,
+                    label: row
+                        .try_get("label")
+                        .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+                    status,
+                    current_location_id: row
+                        .try_get("current_location_id")
+                        .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+                    lines: Vec::new(),
+                });
+            }
+
+            if let Some(sku) = row
+                .try_get::<Option<String>, _>("product_sku")
+                .map_err(|error| RepositoryError::Storage(error.to_string()))?
+            {
+                let quantity = row
+                    .try_get::<i64, _>("quantity")
+                    .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+                let quantity = u32::try_from(quantity).map_err(|_| {
+                    RepositoryError::Storage("cantidad de línea fuera de rango".to_owned())
+                })?;
+                let lot_code: String = row
+                    .try_get("lot_code")
+                    .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+                let line = HandlingUnitLine {
+                    sku: Sku::new(sku)
+                        .map_err(|error| RepositoryError::Storage(error.to_string()))?,
+                    quantity,
+                    lot_code: (!lot_code.is_empty()).then_some(lot_code),
+                };
+                units
+                    .last_mut()
+                    .expect("la unidad se creó para la fila")
+                    .lines
+                    .push(line);
+            }
+        }
+
+        if units.iter().any(|unit| unit.lines.is_empty()) {
+            return Err(RepositoryError::Storage(
+                "unidad persistida sin líneas de producto".to_owned(),
+            ));
+        }
+        Ok(units)
     }
 }
 
@@ -234,6 +319,24 @@ impl InventoryRepository for SqliteInventoryRepository {
             return Err(RepositoryError::NotFound);
         }
         Ok(())
+    }
+
+    async fn find_handling_unit(
+        &self,
+        id_or_label: &str,
+    ) -> Result<Option<HandlingUnit>, RepositoryError> {
+        Ok(self
+            .query_handling_units(Some(id_or_label), true)
+            .await?
+            .into_iter()
+            .next())
+    }
+
+    async fn list_handling_units(
+        &self,
+        include_dispatched: bool,
+    ) -> Result<Vec<HandlingUnit>, RepositoryError> {
+        self.query_handling_units(None, include_dispatched).await
     }
 
     async fn receive_unit(
@@ -950,9 +1053,9 @@ mod tests {
     use super::*;
     use crate::application::{
         CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
-        EventOutcome, GetLocation, GetMovementHistory, GetProduct, InventoryRepository,
-        ListLocations, ListProducts, MoveUnit, ReceiveLine, ReceiveUnit, RecordCorrection,
-        UpdateLocation, UpdateProduct,
+        EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
+        InventoryRepository, ListHandlingUnits, ListLocations, ListProducts, MoveUnit, ReceiveLine,
+        ReceiveUnit, RecordCorrection, UpdateLocation, UpdateProduct,
     };
     use crate::domain::{MovementKind, Sku};
     use std::sync::Arc;
@@ -972,6 +1075,116 @@ mod tests {
             sqlx::query("INSERT INTO locations (id, code, name, kind, parent_id) VALUES (?, ?, 'Posición', 'position', 'rack-1')")
                 .bind(id).bind(code).execute(pool).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn handling_unit_queries_find_by_id_or_label_and_filter_dispatched_units() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        insert_location_tree(database.pool()).await;
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        repository
+            .insert_product(&Product::new("SKU-1", "Caja", "unidad").unwrap())
+            .await
+            .unwrap();
+        let unit = HandlingUnit::new(
+            "unit-1",
+            "PALLET-1",
+            vec![HandlingUnitLine::new("SKU-1", 3, Some("LOT-1")).unwrap()],
+        )
+        .unwrap();
+        let receipt = MovementEvent::new(
+            "event-received",
+            "unit-1",
+            MovementKind::Received,
+            None::<&str>,
+            None::<&str>,
+            1_800_000_000_000,
+            "test",
+        )
+        .unwrap();
+        repository.receive_unit(&unit, &receipt).await.unwrap();
+        let store = MovementEvent::new(
+            "event-stored",
+            "unit-1",
+            MovementKind::Stored,
+            None::<&str>,
+            Some("position-1"),
+            1_800_000_000_001,
+            "test",
+        )
+        .unwrap();
+        repository.record_movement(&store).await.unwrap();
+
+        let by_id = GetHandlingUnit::new(repository.clone())
+            .execute(" unit-1 ")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_id.status, HandlingUnitStatus::Stored);
+        assert_eq!(by_id.current_location_id.as_deref(), Some("position-1"));
+        assert_eq!(by_id.lines[0].quantity, 3);
+        assert_eq!(by_id.lines[0].lot_code.as_deref(), Some("LOT-1"));
+
+        let by_label = GetHandlingUnit::new(repository.clone())
+            .execute("pallet-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_label.id, "unit-1");
+
+        let overlapping_unit = HandlingUnit::new(
+            "unit-2",
+            "unit-1",
+            vec![HandlingUnitLine::new("SKU-1", 1, None::<&str>).unwrap()],
+        )
+        .unwrap();
+        let overlapping_receipt = MovementEvent::new(
+            "event-received-2",
+            "unit-2",
+            MovementKind::Received,
+            None::<&str>,
+            None::<&str>,
+            1_800_000_000_003,
+            "test",
+        )
+        .unwrap();
+        repository
+            .receive_unit(&overlapping_unit, &overlapping_receipt)
+            .await
+            .unwrap();
+        let exact_id_match = GetHandlingUnit::new(repository.clone())
+            .execute("unit-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exact_id_match.id, "unit-1");
+
+        let dispatch = MovementEvent::new(
+            "event-dispatched",
+            "unit-1",
+            MovementKind::Dispatched,
+            Some("position-1"),
+            None::<&str>,
+            1_800_000_000_002,
+            "test",
+        )
+        .unwrap();
+        repository.record_movement(&dispatch).await.unwrap();
+        let active_units = ListHandlingUnits::new(repository.clone())
+            .execute(false)
+            .await
+            .unwrap();
+        assert_eq!(active_units.len(), 1);
+        assert_eq!(active_units[0].id, "unit-2");
+        let all = ListHandlingUnits::new(repository)
+            .execute(true)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 2);
+        let dispatched_unit = all.iter().find(|unit| unit.id == "unit-1").unwrap();
+        assert_eq!(dispatched_unit.status, HandlingUnitStatus::Dispatched);
+        assert_eq!(dispatched_unit.current_location_id, None);
+        database.close().await;
     }
 
     fn movement(

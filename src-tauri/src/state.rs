@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use crate::{
-    config::AppConfig, diagnostic_log::DiagnosticLog, infrastructure::sqlite::SqliteDatabase,
-};
+use crate::{application::InventoryRepository, config::AppConfig, diagnostic_log::DiagnosticLog};
 
 pub struct AppState {
     pub config: AppConfig,
-    pub database: SqliteDatabase,
+    pub inventory_repository: Arc<dyn InventoryRepository>,
     pub diagnostic_log: Arc<DiagnosticLog>,
 }
