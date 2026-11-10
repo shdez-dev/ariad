@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::domain::{
-    DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementEvent,
-    MovementKind, Product, Sku,
+    DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementCorrection,
+    MovementEvent, MovementKind, Product, Sku,
 };
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -30,6 +30,10 @@ pub enum RepositoryError {
     PositionOccupied,
     #[error("el destino no es una posición activa")]
     InvalidDestination,
+    #[error("el evento de origen de la corrección no existe o pertenece a otra unidad")]
+    CorrectionReferenceMismatch,
+    #[error("la corrección no puede tener una fecha anterior al evento original")]
+    CorrectionBeforeOriginal,
     #[error("error de persistencia: {0}")]
     Storage(String),
 }
@@ -38,6 +42,23 @@ pub enum RepositoryError {
 pub enum EventOutcome {
     Applied,
     Duplicate,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovementHistoryEntry {
+    pub record_id: String,
+    pub event_id: String,
+    pub handling_unit_id: String,
+    pub kind: String,
+    pub origin_location_id: Option<String>,
+    pub destination_location_id: Option<String>,
+    pub occurred_at_ms: i64,
+    pub recorded_at_ms: i64,
+    pub source: String,
+    pub result: String,
+    pub rejection_reason: Option<String>,
+    pub corrects_event_id: Option<String>,
+    pub correction_reason: Option<String>,
 }
 
 #[async_trait]
@@ -73,6 +94,16 @@ pub trait InventoryRepository: Send + Sync {
 
     async fn record_movement(&self, event: &MovementEvent)
     -> Result<EventOutcome, RepositoryError>;
+
+    async fn record_correction(
+        &self,
+        correction: &MovementCorrection,
+    ) -> Result<EventOutcome, RepositoryError>;
+
+    async fn list_movement_history(
+        &self,
+        handling_unit_id: &str,
+    ) -> Result<Vec<MovementHistoryEntry>, RepositoryError>;
 }
 
 #[derive(Debug, Error)]
@@ -137,6 +168,12 @@ impl ApplicationError {
             }
             Self::Repository(RepositoryError::InvalidDestination) => {
                 "El destino debe ser una posición existente y activa."
+            }
+            Self::Repository(RepositoryError::CorrectionReferenceMismatch) => {
+                "La corrección debe apuntar a un evento de la misma unidad."
+            }
+            Self::Repository(RepositoryError::CorrectionBeforeOriginal) => {
+                "La fecha de la corrección debe ser igual o posterior al evento original."
             }
             Self::Repository(RepositoryError::Storage(_)) => {
                 "No se pudo completar la operación. No se confirmaron cambios."
@@ -475,6 +512,60 @@ impl MoveUnit {
     }
 }
 
+pub struct RecordCorrection {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl RecordCorrection {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        correction_id: &str,
+        handling_unit_id: &str,
+        corrects_event_id: &str,
+        reason: &str,
+        occurred_at_ms: i64,
+        source: &str,
+    ) -> Result<EventOutcome, ApplicationError> {
+        let correction = MovementCorrection::new(
+            correction_id,
+            handling_unit_id,
+            corrects_event_id,
+            reason,
+            occurred_at_ms,
+            source,
+        )?;
+        Ok(self.repository.record_correction(&correction).await?)
+    }
+}
+
+pub struct GetMovementHistory {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl GetMovementHistory {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        handling_unit_id: &str,
+    ) -> Result<Vec<MovementHistoryEntry>, ApplicationError> {
+        let handling_unit_id = handling_unit_id.trim();
+        if handling_unit_id.is_empty() {
+            return Err(DomainError::EmptyField("unidad de manipulación").into());
+        }
+        Ok(self
+            .repository
+            .list_movement_history(handling_unit_id)
+            .await?)
+    }
+}
+
 pub fn map_error_for_ui(
     diagnostic_log: &crate::diagnostic_log::DiagnosticLog,
     operation: &str,
@@ -560,6 +651,20 @@ mod tests {
             _event: &MovementEvent,
         ) -> Result<EventOutcome, RepositoryError> {
             Ok(EventOutcome::Applied)
+        }
+
+        async fn record_correction(
+            &self,
+            _correction: &MovementCorrection,
+        ) -> Result<EventOutcome, RepositoryError> {
+            Ok(EventOutcome::Applied)
+        }
+
+        async fn list_movement_history(
+            &self,
+            _handling_unit_id: &str,
+        ) -> Result<Vec<MovementHistoryEntry>, RepositoryError> {
+            Ok(Vec::new())
         }
     }
 

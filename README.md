@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-08 añaden módulos de dominio y aplicación, catálogo y ubicaciones, recepción, despacho y traslados con persistencia SQLite, idempotencia de eventos, configuración local y registro diagnóstico. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación de flujos gráficos continúa pendiente.
+La aplicación Tauri v2 y la pantalla inicial están creadas. ARD-03 a ARD-09 añaden módulos de dominio y aplicación, catálogo y ubicaciones, recepción, despacho y traslados con persistencia SQLite, idempotencia, historial cronológico y correcciones trazables. La interfaz todavía no consulta ni guarda inventario y aún no registra comandos IPC de negocio. La aceptación de flujos gráficos continúa pendiente.
 
 ## Requisitos del entorno
 
@@ -53,8 +53,7 @@ Consulta [la línea base de arquitectura](docs/arquitectura-base.md) y [la matri
 
 ## Trabajo siguiente
 
-1. Completar historial y correcciones (ARD-09).
-2. Exponer los casos de uso mediante IPC (ARD-10) y conectarlos con las pantallas previstas.
+1. Exponer los casos de uso mediante IPC (ARD-10) y conectarlos con las pantallas previstas.
 
 ## Verificación local
 
@@ -63,5 +62,5 @@ npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-El incremento actual pasó la compilación de interfaz, 34 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, operaciones de catálogo y ubicaciones, jerarquía y ancestros activos, ocupación, desactivación sin borrar referencias, recepción atómica, SKU y cantidades inválidas, despacho con liberación de posición, traslados con origen validado y registro de origen/destino, rechazos por destino ocupado o inactivo, idempotencia secuencial y concurrente, competencia por una posición, rollback ante fallo del evento, historial inmutable, migraciones y copia de base.
+El incremento actual pasó la compilación de interfaz, 37 pruebas Rust y Clippy sin advertencias. Las pruebas cubren validaciones de dominio, catálogo y ubicaciones, recepción y despacho, traslados y capacidad, idempotencia secuencial y concurrente, intentos rechazados, reconstrucción cronológica del historial, correcciones vinculadas sin mutación de stock, protecciones append-only, rollback y migraciones sobre bases limpias y copias.
 

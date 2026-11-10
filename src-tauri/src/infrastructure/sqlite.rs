@@ -9,10 +9,10 @@ use sqlx::{
 use thiserror::Error;
 
 use crate::{
-    application::{EventOutcome, InventoryRepository, RepositoryError},
+    application::{EventOutcome, InventoryRepository, MovementHistoryEntry, RepositoryError},
     domain::{
-        HandlingUnit, HandlingUnitStatus, Location, LocationKind, MovementEvent, MovementKind,
-        Product, Sku,
+        HandlingUnit, HandlingUnitStatus, Location, LocationKind, MovementCorrection,
+        MovementEvent, MovementKind, Product, Sku,
     },
 };
 
@@ -290,33 +290,68 @@ impl InventoryRepository for SqliteInventoryRepository {
                 && previous_label.as_deref() == Some(unit.label.as_str())
                 && previous_lines == expected_lines;
             if payload_matches {
+                record_event_attempt(&mut transaction, event, "duplicate", None).await?;
                 transaction.commit().await.map_err(map_repository_error)?;
                 return Ok(EventOutcome::Duplicate);
             }
-            let _ = transaction.rollback().await;
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_conflict"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
             return Err(RepositoryError::EventIdConflict);
         }
 
-        let result = async {
-            for line in &unit.lines {
-                let product_active = sqlx::query_scalar::<_, i64>(
-                    "SELECT is_active FROM products WHERE sku = ?",
-                )
-                .bind(line.sku.as_str())
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(map_repository_error)?
-                .ok_or(RepositoryError::NotFound)?;
-                if product_active == 0 {
+        if movement_attempt_exists(&mut transaction, &event.event_id).await? {
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_previously_rejected"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Err(RepositoryError::EventIdConflict);
+        }
+
+        for line in &unit.lines {
+            let product_active =
+                sqlx::query_scalar::<_, i64>("SELECT is_active FROM products WHERE sku = ?")
+                    .bind(line.sku.as_str())
+                    .fetch_optional(&mut *transaction)
+                    .await
+                    .map_err(map_repository_error)?;
+            match product_active {
+                None => {
+                    record_event_attempt(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some("product_not_found"),
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
+                    return Err(RepositoryError::NotFound);
+                }
+                Some(0) => {
+                    record_event_attempt(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some("product_inactive"),
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
                     return Err(RepositoryError::InactiveProduct);
                 }
-                if line.quantity == 0 {
-                    return Err(RepositoryError::Storage(
-                        "cantidad de línea inválida en unidad de recepción".to_owned(),
-                    ));
-                }
+                Some(_) => {}
             }
+        }
 
+        let result = async {
             sqlx::query(
                 "INSERT INTO handling_units (id, label, status, current_location_id, created_at_ms, updated_at_ms) VALUES (?, ?, 'received', NULL, ?, ?)",
             )
@@ -342,12 +377,13 @@ impl InventoryRepository for SqliteInventoryRepository {
             }
 
             sqlx::query(
-                "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result) VALUES (?, ?, 'received', NULL, NULL, ?, ?, 'accepted')",
+                "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, created_at_ms) VALUES (?, ?, 'received', NULL, NULL, ?, ?, 'accepted', ?)",
             )
             .bind(&event.event_id)
             .bind(&unit.id)
             .bind(event.occurred_at_ms)
             .bind(&event.source)
+            .bind(now_ms())
             .execute(&mut *transaction)
             .await
             .map_err(map_repository_error)?;
@@ -358,6 +394,27 @@ impl InventoryRepository for SqliteInventoryRepository {
 
         if let Err(error) = result {
             let _ = transaction.rollback().await;
+            if matches!(
+                &error,
+                RepositoryError::Conflict | RepositoryError::EventIdConflict
+            ) {
+                let mut attempt_transaction = self
+                    .pool
+                    .begin_with("BEGIN IMMEDIATE")
+                    .await
+                    .map_err(map_repository_error)?;
+                record_event_attempt(
+                    &mut attempt_transaction,
+                    event,
+                    "rejected",
+                    Some(event_attempt_reason(&error)),
+                )
+                .await?;
+                attempt_transaction
+                    .commit()
+                    .await
+                    .map_err(map_repository_error)?;
+            }
             return Err(error);
         }
         transaction
@@ -381,10 +438,30 @@ impl InventoryRepository for SqliteInventoryRepository {
             event_payload_for_id(&mut transaction, &event.event_id).await?
         {
             if movement_payload_matches(&previous_event, event) {
+                record_event_attempt(&mut transaction, event, "duplicate", None).await?;
                 transaction.commit().await.map_err(map_repository_error)?;
                 return Ok(EventOutcome::Duplicate);
             }
-            let _ = transaction.rollback().await;
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_conflict"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Err(RepositoryError::EventIdConflict);
+        }
+
+        if movement_attempt_exists(&mut transaction, &event.event_id).await? {
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_previously_rejected"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
             return Err(RepositoryError::EventIdConflict);
         }
 
@@ -394,8 +471,18 @@ impl InventoryRepository for SqliteInventoryRepository {
         .bind(&event.handling_unit_id)
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(map_repository_error)?
-        .ok_or(RepositoryError::NotFound)?;
+        .map_err(map_repository_error)?;
+        let Some(current) = current else {
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("handling_unit_not_found"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Err(RepositoryError::NotFound);
+        };
 
         let current_status = match current.0.as_str() {
             "received" => HandlingUnitStatus::Received,
@@ -408,7 +495,20 @@ impl InventoryRepository for SqliteInventoryRepository {
             }
         };
         let (new_status, new_location_id) =
-            transition_target(event, current_status, current.1.as_deref())?;
+            match transition_target(event, current_status, current.1.as_deref()) {
+                Ok(target) => target,
+                Err(error) => {
+                    record_event_attempt(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some("invalid_transition"),
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
+                    return Err(error);
+                }
+            };
 
         let update_result = sqlx::query(
             "UPDATE handling_units SET status = ?, current_location_id = ?, updated_at_ms = ? WHERE id = ? AND status = ? AND current_location_id IS ?",
@@ -425,17 +525,41 @@ impl InventoryRepository for SqliteInventoryRepository {
         let update = match update_result {
             Ok(update) => update,
             Err(error) => {
-                let _ = transaction.rollback().await;
-                return Err(map_repository_error(error));
+                let repository_error = map_repository_error(error);
+                if matches!(
+                    &repository_error,
+                    RepositoryError::PositionOccupied
+                        | RepositoryError::InvalidDestination
+                        | RepositoryError::NotFound
+                ) {
+                    record_event_attempt(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some(event_attempt_reason(&repository_error)),
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
+                } else {
+                    let _ = transaction.rollback().await;
+                }
+                return Err(repository_error);
             }
         };
         if update.rows_affected() != 1 {
-            let _ = transaction.rollback().await;
+            record_event_attempt(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("invalid_transition"),
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
             return Err(RepositoryError::InvalidTransition);
         }
 
         let insert_result = sqlx::query(
-            "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted')",
+            "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?)",
         )
         .bind(&event.event_id)
         .bind(&event.handling_unit_id)
@@ -444,6 +568,7 @@ impl InventoryRepository for SqliteInventoryRepository {
         .bind(&event.destination_location_id)
         .bind(event.occurred_at_ms)
         .bind(&event.source)
+        .bind(now_ms())
         .execute(&mut *transaction)
         .await;
 
@@ -457,6 +582,152 @@ impl InventoryRepository for SqliteInventoryRepository {
             .await
             .map(|()| EventOutcome::Applied)
             .map_err(map_repository_error)
+    }
+
+    async fn record_correction(
+        &self,
+        correction: &MovementCorrection,
+    ) -> Result<EventOutcome, RepositoryError> {
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_repository_error)?;
+
+        let existing = sqlx::query_as::<_, (String, String, String, i64, String)>(
+            "SELECT handling_unit_id, corrects_event_id, reason, occurred_at_ms, source FROM movement_corrections WHERE correction_id = ?",
+        )
+        .bind(&correction.correction_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_repository_error)?;
+        if let Some(existing) = existing {
+            let matches = existing.0 == correction.handling_unit_id
+                && existing.1 == correction.corrects_event_id
+                && existing.2 == correction.reason
+                && existing.3 == correction.occurred_at_ms
+                && existing.4 == correction.source;
+            if matches {
+                transaction.commit().await.map_err(map_repository_error)?;
+                return Ok(EventOutcome::Duplicate);
+            }
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::EventIdConflict);
+        }
+
+        let unit_exists: i64 =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM handling_units WHERE id = ?)")
+                .bind(&correction.handling_unit_id)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_repository_error)?;
+        if unit_exists == 0 {
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::NotFound);
+        }
+        let (original_unit, original_occurred_at_ms) = sqlx::query_as::<_, (String, i64)>(
+            "SELECT handling_unit_id, occurred_at_ms FROM movement_events WHERE event_id = ?",
+        )
+        .bind(&correction.corrects_event_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_repository_error)?
+        .ok_or(RepositoryError::NotFound)?;
+        if original_unit != correction.handling_unit_id {
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::CorrectionReferenceMismatch);
+        }
+        if correction.occurred_at_ms < original_occurred_at_ms {
+            let _ = transaction.rollback().await;
+            return Err(RepositoryError::CorrectionBeforeOriginal);
+        }
+
+        sqlx::query(
+            "INSERT INTO movement_corrections (correction_id, handling_unit_id, corrects_event_id, reason, occurred_at_ms, source, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&correction.correction_id)
+        .bind(&correction.handling_unit_id)
+        .bind(&correction.corrects_event_id)
+        .bind(&correction.reason)
+        .bind(correction.occurred_at_ms)
+        .bind(&correction.source)
+        .bind(now_ms())
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_repository_error)?;
+
+        transaction
+            .commit()
+            .await
+            .map(|()| EventOutcome::Applied)
+            .map_err(map_repository_error)
+    }
+
+    async fn list_movement_history(
+        &self,
+        handling_unit_id: &str,
+    ) -> Result<Vec<MovementHistoryEntry>, RepositoryError> {
+        let history_exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM handling_units WHERE id = ?) OR EXISTS(SELECT 1 FROM movement_attempts WHERE handling_unit_id = ?) OR EXISTS(SELECT 1 FROM movement_corrections WHERE handling_unit_id = ?)",
+        )
+        .bind(handling_unit_id)
+        .bind(handling_unit_id)
+        .bind(handling_unit_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+        if history_exists == 0 {
+            return Err(RepositoryError::NotFound);
+        }
+
+        let rows = sqlx::query_as::<_, MovementHistoryRow>(
+            "SELECT event_id AS record_id, event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, created_at_ms AS recorded_at_ms, source, result, rejection_reason, NULL AS corrects_event_id, NULL AS correction_reason, 0 AS record_order FROM movement_events WHERE handling_unit_id = ? UNION ALL SELECT 'attempt:' || attempt_id AS record_id, event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, created_at_ms AS recorded_at_ms, source, result, rejection_reason, NULL AS corrects_event_id, NULL AS correction_reason, 1 AS record_order FROM movement_attempts WHERE handling_unit_id = ? UNION ALL SELECT correction_id AS record_id, correction_id AS event_id, handling_unit_id, 'correction' AS kind, NULL AS origin_location_id, NULL AS destination_location_id, occurred_at_ms, created_at_ms AS recorded_at_ms, source, 'accepted' AS result, NULL AS rejection_reason, corrects_event_id, reason AS correction_reason, 2 AS record_order FROM movement_corrections WHERE handling_unit_id = ? ORDER BY occurred_at_ms ASC, recorded_at_ms ASC, record_order ASC, record_id ASC",
+        )
+        .bind(handling_unit_id)
+        .bind(handling_unit_id)
+        .bind(handling_unit_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+
+        Ok(rows.into_iter().map(Into::into).collect())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct MovementHistoryRow {
+    record_id: String,
+    event_id: String,
+    handling_unit_id: String,
+    kind: String,
+    origin_location_id: Option<String>,
+    destination_location_id: Option<String>,
+    occurred_at_ms: i64,
+    recorded_at_ms: i64,
+    source: String,
+    result: String,
+    rejection_reason: Option<String>,
+    corrects_event_id: Option<String>,
+    correction_reason: Option<String>,
+}
+
+impl From<MovementHistoryRow> for MovementHistoryEntry {
+    fn from(row: MovementHistoryRow) -> Self {
+        Self {
+            record_id: row.record_id,
+            event_id: row.event_id,
+            handling_unit_id: row.handling_unit_id,
+            kind: row.kind,
+            origin_location_id: row.origin_location_id,
+            destination_location_id: row.destination_location_id,
+            occurred_at_ms: row.occurred_at_ms,
+            recorded_at_ms: row.recorded_at_ms,
+            source: row.source,
+            result: row.result,
+            rejection_reason: row.rejection_reason,
+            corrects_event_id: row.corrects_event_id,
+            correction_reason: row.correction_reason,
+        }
     }
 }
 
@@ -482,6 +753,54 @@ fn movement_payload_matches(previous: &StoredEventPayload, event: &MovementEvent
         && previous.3 == event.destination_location_id
         && previous.4 == event.occurred_at_ms
         && previous.5 == event.source
+}
+
+async fn movement_attempt_exists(
+    transaction: &mut Transaction<'_, Sqlite>,
+    event_id: &str,
+) -> Result<bool, RepositoryError> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM movement_attempts WHERE event_id = ? AND result = 'rejected')",
+    )
+    .bind(event_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(map_repository_error)?;
+    Ok(exists != 0)
+}
+
+async fn record_event_attempt(
+    transaction: &mut Transaction<'_, Sqlite>,
+    event: &MovementEvent,
+    result: &str,
+    rejection_reason: Option<&str>,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO movement_attempts (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, rejection_reason, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&event.event_id)
+    .bind(&event.handling_unit_id)
+    .bind(event.kind.as_str())
+    .bind(&event.origin_location_id)
+    .bind(&event.destination_location_id)
+    .bind(event.occurred_at_ms)
+    .bind(&event.source)
+    .bind(result)
+    .bind(rejection_reason)
+    .bind(now_ms())
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_repository_error)?;
+    Ok(())
+}
+
+fn event_attempt_reason(error: &RepositoryError) -> &'static str {
+    match error {
+        RepositoryError::PositionOccupied => "position_occupied",
+        RepositoryError::InvalidDestination => "invalid_destination",
+        RepositoryError::NotFound => "location_not_found_or_invalid",
+        _ => "movement_rejected",
+    }
 }
 
 fn now_ms() -> i64 {
@@ -595,6 +914,12 @@ fn map_repository_error(error: sqlx::Error) -> RepositoryError {
         return RepositoryError::Storage(error.to_string());
     };
     let message = database_error.message();
+    if message.contains("movement_event_id_conflict")
+        || message.contains("movement_attempt_id_conflict")
+        || message.contains("correction_id_conflict")
+    {
+        return RepositoryError::EventIdConflict;
+    }
     if database_error.is_unique_violation() {
         if message.contains("movement_events.event_id") {
             RepositoryError::EventIdConflict
@@ -625,8 +950,9 @@ mod tests {
     use super::*;
     use crate::application::{
         CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
-        EventOutcome, GetLocation, GetProduct, InventoryRepository, ListLocations, ListProducts,
-        MoveUnit, ReceiveLine, ReceiveUnit, UpdateLocation, UpdateProduct,
+        EventOutcome, GetLocation, GetMovementHistory, GetProduct, InventoryRepository,
+        ListLocations, ListProducts, MoveUnit, ReceiveLine, ReceiveUnit, RecordCorrection,
+        UpdateLocation, UpdateProduct,
     };
     use crate::domain::{MovementKind, Sku};
     use std::sync::Arc;
@@ -1022,7 +1348,7 @@ mod tests {
                     receipt_line("SKU-RECEIPT", 12, Some("LOT-1")),
                     receipt_line("SKU-RECEIPT-2", 2, None),
                 ],
-                "receipt-event-1",
+                "receipt-event-2",
                 1_800_000_000_001,
                 "manual",
             )
@@ -1045,7 +1371,7 @@ mod tests {
         .unwrap();
         assert_eq!(lines, 2);
         let event: (String, String, Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT kind, result, origin_location_id, destination_location_id FROM movement_events WHERE event_id = 'receipt-event-1'",
+            "SELECT kind, result, origin_location_id, destination_location_id FROM movement_events WHERE event_id = 'receipt-event-2'",
         )
         .fetch_one(pool)
         .await
@@ -1372,7 +1698,7 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
 
         let product = Product::new("sku-1", "Caja", "unidad").unwrap();
         let repository = SqliteInventoryRepository::new(&database);
@@ -1459,6 +1785,16 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(events, 0);
+        let history = repository
+            .list_movement_history("unit-missing")
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].result, "rejected");
+        assert_eq!(
+            history[0].rejection_reason.as_deref(),
+            Some("handling_unit_not_found")
+        );
         database.close().await;
     }
 
@@ -2085,6 +2421,333 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn movement_history_reconstructs_timeline_and_records_rejections_and_duplicates() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-HISTORY", "Producto", "unidad")
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-history",
+                "PALLET-HISTORY",
+                vec![receipt_line("SKU-HISTORY", 1, None)],
+                "event-received",
+                1_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        let stored = MovementEvent::new(
+            "event-stored",
+            "unit-history",
+            MovementKind::Stored,
+            None::<&str>,
+            Some("position-1"),
+            2_000,
+            "manual",
+        )
+        .unwrap();
+        repository.record_movement(&stored).await.unwrap();
+
+        let move_unit = MoveUnit::new(repository.clone());
+        assert!(matches!(
+            move_unit
+                .execute(
+                    "event-stale-origin",
+                    "unit-history",
+                    "position-2",
+                    "position-1",
+                    2_500,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InvalidTransition
+            ))
+        ));
+        assert!(matches!(
+            move_unit
+                .execute(
+                    "event-stale-origin",
+                    "unit-history",
+                    "position-1",
+                    "position-2",
+                    2_600,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::EventIdConflict
+            ))
+        ));
+        let move_result = move_unit
+            .execute(
+                "event-moved",
+                "unit-history",
+                "position-1",
+                "position-2",
+                3_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        assert_eq!(move_result, EventOutcome::Applied);
+        assert_eq!(
+            move_unit
+                .execute(
+                    "event-moved",
+                    "unit-history",
+                    "position-1",
+                    "position-2",
+                    3_000,
+                    "manual",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Duplicate
+        );
+        DispatchUnit::new(repository.clone())
+            .execute(
+                "event-dispatched",
+                "unit-history",
+                "position-2",
+                4_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+
+        let history = GetMovementHistory::new(repository)
+            .execute("unit-history")
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 7);
+        assert!(
+            history
+                .windows(2)
+                .all(|pair| pair[0].occurred_at_ms <= pair[1].occurred_at_ms)
+        );
+        let received = history
+            .iter()
+            .find(|entry| entry.record_id == "event-received")
+            .unwrap();
+        assert_eq!(
+            (received.kind.as_str(), received.result.as_str()),
+            ("received", "accepted")
+        );
+        assert_eq!(received.source, "manual");
+        let stored = history
+            .iter()
+            .find(|entry| entry.record_id == "event-stored")
+            .unwrap();
+        assert_eq!(
+            stored.destination_location_id.as_deref(),
+            Some("position-1")
+        );
+        let moved_index = history
+            .iter()
+            .position(|entry| entry.record_id == "event-moved")
+            .unwrap();
+        let moved = &history[moved_index];
+        assert_eq!(moved.origin_location_id.as_deref(), Some("position-1"));
+        assert_eq!(moved.destination_location_id.as_deref(), Some("position-2"));
+        assert_eq!(moved.result, "accepted");
+        let duplicate_index = history
+            .iter()
+            .position(|entry| entry.event_id == "event-moved" && entry.result == "duplicate")
+            .unwrap();
+        assert!(moved_index < duplicate_index);
+        let rejection = history
+            .iter()
+            .find(|entry| entry.event_id == "event-stale-origin")
+            .unwrap();
+        assert_eq!(rejection.result, "rejected");
+        assert_eq!(
+            rejection.rejection_reason.as_deref(),
+            Some("invalid_transition")
+        );
+        let rejected_id_reuse = history
+            .iter()
+            .find(|entry| {
+                entry.event_id == "event-stale-origin"
+                    && entry.rejection_reason.as_deref() == Some("event_id_previously_rejected")
+            })
+            .unwrap();
+        assert_eq!(rejected_id_reuse.result, "rejected");
+        let dispatched = history
+            .iter()
+            .find(|entry| entry.record_id == "event-dispatched")
+            .unwrap();
+        assert_eq!(dispatched.origin_location_id.as_deref(), Some("position-2"));
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn corrections_are_linked_idempotent_and_do_not_rewrite_or_move_inventory() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        sqlx::query("INSERT INTO handling_units (id, label, status) VALUES ('unit-1', 'PALLET-1', 'received'), ('unit-2', 'PALLET-2', 'received')")
+            .execute(pool).await.unwrap();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        let stored = MovementEvent::new(
+            "event-stored",
+            "unit-1",
+            MovementKind::Stored,
+            None::<&str>,
+            Some("position-1"),
+            1_000,
+            "manual",
+        )
+        .unwrap();
+        repository.record_movement(&stored).await.unwrap();
+        let correction = RecordCorrection::new(repository.clone());
+        assert!(matches!(
+            correction
+                .execute(
+                    "correction-before-original",
+                    "unit-1",
+                    "event-stored",
+                    "Fecha inválida para una corrección.",
+                    999,
+                    "manual-audit",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::CorrectionBeforeOriginal
+            ))
+        ));
+        assert_eq!(
+            correction
+                .execute(
+                    "correction-1",
+                    "unit-1",
+                    "event-stored",
+                    "El conteo físico confirmó la posición registrada.",
+                    2_000,
+                    "manual-audit",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Applied
+        );
+        assert_eq!(
+            correction
+                .execute(
+                    "correction-1",
+                    "unit-1",
+                    "event-stored",
+                    "El conteo físico confirmó la posición registrada.",
+                    2_000,
+                    "manual-audit",
+                )
+                .await
+                .unwrap(),
+            EventOutcome::Duplicate
+        );
+        assert!(matches!(
+            correction
+                .execute(
+                    "correction-1",
+                    "unit-1",
+                    "event-stored",
+                    "contenido diferente",
+                    2_000,
+                    "manual-audit",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::EventIdConflict
+            ))
+        ));
+        assert!(matches!(
+            correction
+                .execute(
+                    "correction-wrong-unit",
+                    "unit-2",
+                    "event-stored",
+                    "Referencia cruzada inválida.",
+                    2_001,
+                    "manual-audit",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::CorrectionReferenceMismatch
+            ))
+        ));
+        assert!(matches!(
+            correction
+                .execute(
+                    "correction-missing-event",
+                    "unit-1",
+                    "event-missing",
+                    "El evento no existe.",
+                    2_002,
+                    "manual-audit",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::NotFound
+            ))
+        ));
+
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-1".to_owned())));
+        let original: (String, String, Option<String>) = sqlx::query_as(
+            "SELECT kind, source, destination_location_id FROM movement_events WHERE event_id = 'event-stored'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            original,
+            (
+                "stored".to_owned(),
+                "manual".to_owned(),
+                Some("position-1".to_owned())
+            )
+        );
+        let history = GetMovementHistory::new(repository)
+            .execute("unit-1")
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        let correction_entry = history
+            .iter()
+            .find(|entry| entry.record_id == "correction-1")
+            .unwrap();
+        assert_eq!(correction_entry.kind, "correction");
+        assert_eq!(
+            correction_entry.corrects_event_id.as_deref(),
+            Some("event-stored")
+        );
+        assert_eq!(
+            correction_entry.correction_reason.as_deref(),
+            Some("El conteo físico confirmó la posición registrada.")
+        );
+        assert_eq!(correction_entry.result, "accepted");
+        let correction_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_corrections WHERE correction_id = 'correction-1'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(correction_count, 1);
+        database.close().await;
+    }
+
+    #[tokio::test]
     async fn movement_history_rejects_updates_and_deletes() {
         let database = SqliteDatabase::in_memory().await.unwrap();
         insert_location_tree(database.pool()).await;
@@ -2101,6 +2764,38 @@ mod tests {
             ))
             .await
             .unwrap();
+        assert_eq!(
+            repository
+                .record_movement(&movement(
+                    "event-rejected",
+                    "unit-1",
+                    MovementKind::Moved,
+                    Some("position-2"),
+                    Some("position-1"),
+                ))
+                .await,
+            Err(RepositoryError::InvalidTransition)
+        );
+        sqlx::query("INSERT INTO movement_corrections (correction_id, handling_unit_id, corrects_event_id, reason, occurred_at_ms, source) VALUES ('correction-1', 'unit-1', 'event-1', 'Corrección de prueba', 1800000000001, 'test')")
+            .execute(database.pool()).await.unwrap();
+        let error = sqlx::query("INSERT INTO movement_corrections (correction_id, handling_unit_id, corrects_event_id, reason, occurred_at_ms, source) VALUES ('correction-before-original', 'unit-1', 'event-1', 'Fecha previa no permitida', 1799999999999, 'test')")
+            .execute(database.pool())
+            .await
+            .unwrap_err();
+        let message = error
+            .as_database_error()
+            .map(|database_error| database_error.message())
+            .unwrap_or_default();
+        assert!(
+            message.contains("correction_precedes_original"),
+            "{message}"
+        );
+        assert!(
+            sqlx::query("INSERT INTO movement_attempts (event_id, handling_unit_id, kind, occurred_at_ms, source, result, rejection_reason) VALUES ('correction-1', 'unit-1', 'moved', 1800000000002, 'test', 'rejected', 'id_collision')")
+                .execute(database.pool())
+                .await
+                .is_err()
+        );
 
         assert!(
             sqlx::query("UPDATE movement_events SET source = 'edited' WHERE event_id = 'event-1'")
@@ -2110,6 +2805,32 @@ mod tests {
         );
         assert!(
             sqlx::query("DELETE FROM movement_events WHERE event_id = 'event-1'")
+                .execute(database.pool())
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query(
+                "UPDATE movement_attempts SET source = 'edited' WHERE event_id = 'event-rejected'"
+            )
+            .execute(database.pool())
+            .await
+            .is_err()
+        );
+        assert!(
+            sqlx::query("DELETE FROM movement_attempts WHERE event_id = 'event-rejected'")
+                .execute(database.pool())
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("UPDATE movement_corrections SET reason = 'edited' WHERE correction_id = 'correction-1'")
+                .execute(database.pool())
+                .await
+                .is_err()
+        );
+        assert!(
+            sqlx::query("DELETE FROM movement_corrections WHERE correction_id = 'correction-1'")
                 .execute(database.pool())
                 .await
                 .is_err()
@@ -2152,7 +2873,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(product_count, 1);
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
 
         copied.close().await;
         std::fs::remove_dir_all(directory).unwrap();

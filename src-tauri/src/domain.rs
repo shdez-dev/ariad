@@ -28,6 +28,8 @@ pub enum DomainError {
     DuplicateHandlingUnitLine,
     #[error("La fecha del evento debe ser posterior al inicio de Unix.")]
     InvalidTimestamp,
+    #[error("La corrección no puede referirse a sí misma.")]
+    InvalidCorrectionReference,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -343,6 +345,49 @@ pub struct MovementEvent {
     pub source: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovementCorrection {
+    pub correction_id: String,
+    pub handling_unit_id: String,
+    pub corrects_event_id: String,
+    pub reason: String,
+    pub occurred_at_ms: i64,
+    pub source: String,
+}
+
+impl MovementCorrection {
+    pub fn new(
+        correction_id: impl AsRef<str>,
+        handling_unit_id: impl AsRef<str>,
+        corrects_event_id: impl AsRef<str>,
+        reason: impl AsRef<str>,
+        occurred_at_ms: i64,
+        source: impl AsRef<str>,
+    ) -> Result<Self, DomainError> {
+        if occurred_at_ms <= 0 {
+            return Err(DomainError::InvalidTimestamp);
+        }
+        let correction_id = required(correction_id.as_ref(), "identificador de corrección")?;
+        let corrects_event_id = required(corrects_event_id.as_ref(), "evento corregido")?;
+        if correction_id == corrects_event_id {
+            return Err(DomainError::InvalidCorrectionReference);
+        }
+        let reason = required(reason.as_ref(), "motivo de corrección")?;
+        if reason.len() > 500 {
+            return Err(DomainError::FieldTooLong("motivo de corrección"));
+        }
+
+        Ok(Self {
+            correction_id,
+            handling_unit_id: required(handling_unit_id.as_ref(), "unidad de manipulación")?,
+            corrects_event_id,
+            reason,
+            occurred_at_ms,
+            source: required(source.as_ref(), "fuente de corrección")?,
+        })
+    }
+}
+
 impl MovementEvent {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -523,5 +568,55 @@ mod tests {
         unit.dispatch().unwrap();
         assert_eq!(unit.status, HandlingUnitStatus::Dispatched);
         assert_eq!(unit.current_location_id, None);
+    }
+
+    #[test]
+    fn validates_correction_identity_reason_and_timestamp() {
+        let correction = MovementCorrection::new(
+            " correction-1 ",
+            " unit-1 ",
+            " event-1 ",
+            " Conteo manual ",
+            1_800_000_000_000,
+            " manual ",
+        )
+        .unwrap();
+        assert_eq!(correction.correction_id, "correction-1");
+        assert_eq!(correction.corrects_event_id, "event-1");
+        assert_eq!(correction.reason, "Conteo manual");
+
+        assert_eq!(
+            MovementCorrection::new(
+                "event-1",
+                "unit-1",
+                "event-1",
+                "Motivo",
+                1_800_000_000_000,
+                "manual",
+            ),
+            Err(DomainError::InvalidCorrectionReference)
+        );
+        assert_eq!(
+            MovementCorrection::new(
+                "correction-2",
+                "unit-1",
+                "event-1",
+                " ",
+                1_800_000_000_000,
+                "manual",
+            ),
+            Err(DomainError::EmptyField("motivo de corrección"))
+        );
+        assert_eq!(
+            MovementCorrection::new(
+                "correction-3",
+                "unit-1",
+                "event-1",
+                "x".repeat(501),
+                1_800_000_000_000,
+                "manual",
+            ),
+            Err(DomainError::FieldTooLong("motivo de corrección"))
+        );
     }
 }
