@@ -58,7 +58,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 ## Trabajo siguiente
 
 1. Cerrar la aceptación visual manual de ARD-11 a ARD-15 en la ventana Tauri.
-2. Revisar y publicar el artefacto de demostración y la evidencia de ARD-22.
+2. Revisar manualmente el instalador y el informe publicados por CI para cerrar ARD-22.
 3. Continuar con la guía de operación, aceptación de versión candidata y documentación de portfolio.
 
 ## Verificación local
