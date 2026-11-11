@@ -23,6 +23,7 @@
         <button class="nav-button" type="button" data-view-button="products" aria-pressed="false">Productos</button>
         <button class="nav-button" type="button" data-view-button="locations" aria-pressed="false">Ubicaciones</button>
         <button class="nav-button" type="button" data-view-button="units" aria-pressed="false">Unidades</button>
+        <button class="nav-button" type="button" data-view-button="operations" aria-pressed="false">Movimientos</button>
       </nav>
       <div class="topbar-meta">
         <span class="environment-badge"><span class="status-dot" aria-hidden="true"></span>Datos locales</span>
@@ -192,6 +193,103 @@
           </div>
           <aside class="detail-panel unit-detail-panel" id="unit-details" aria-label="Detalle de unidad">
             <div class="selection-empty"><span class="selection-mark" aria-hidden="true">▣</span><p class="detail-kicker">DETALLE DE UNIDAD</p><h2 class="detail-title">Selecciona un pallet</h2><p class="detail-muted">Se mostrarán su ubicación registrada y las líneas de producto de SQLite.</p></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="app-view" id="view-operations" aria-labelledby="operations-title" hidden>
+        <div class="module-heading">
+          <div>
+            <p class="eyebrow"><span class="eyebrow-mark">05</span> OPERACIÓN DE INVENTARIO</p>
+            <h1 id="operations-title">Movimientos</h1>
+            <p class="intro-copy">Registra recepciones, asigna posiciones, traslada unidades y confirma despachos.</p>
+          </div>
+          <button class="secondary-button" id="operations-refresh" type="button">Actualizar datos</button>
+        </div>
+        <p class="module-status" id="operations-status" role="status" aria-live="polite">Consultando productos, unidades y ubicaciones…</p>
+        <p class="operation-availability" id="operation-availability" role="note"></p>
+        <div class="operations-grid">
+          <div class="operation-panel">
+            <div class="operation-tabs" role="group" aria-label="Tipo de movimiento">
+              <button class="operation-tab is-current" type="button" data-operation-tab="receive" aria-pressed="true">Recepción</button>
+              <button class="operation-tab" type="button" data-operation-tab="store" aria-pressed="false">Asignar posición</button>
+              <button class="operation-tab" type="button" data-operation-tab="move" aria-pressed="false">Trasladar</button>
+              <button class="operation-tab" type="button" data-operation-tab="dispatch" aria-pressed="false">Despachar</button>
+            </div>
+
+            <section class="operation-form-panel" data-operation-panel="receive" aria-labelledby="receive-operation-title">
+              <form class="editor-form operation-form" id="receive-operation-form">
+                <div class="form-heading"><div><p class="section-kicker">INGRESO DE MERCADERÍA</p><h2 id="receive-operation-title">Recibir unidad</h2></div></div>
+                <fieldset class="operation-fieldset" id="receive-operation-fields">
+                  <legend class="sr-only">Datos de recepción de una unidad</legend>
+                  <label class="form-field" for="receive-label">Etiqueta del pallet
+                    <input id="receive-label" maxlength="120" required autocomplete="off" placeholder="Ej.: PALLET-2026-001" />
+                  </label>
+                  <div class="receive-lines-heading"><h3>Líneas de producto</h3><button class="secondary-button" id="receive-line-add" type="button">Añadir línea</button></div>
+                  <div class="receive-lines" id="receive-lines"></div>
+                  <p class="form-hint">Cada línea requiere un producto activo y una cantidad entera mayor que cero. La unidad queda pendiente de ubicación.</p>
+                  <div class="form-actions"><button class="primary-button" id="receive-submit" type="submit">Confirmar recepción</button></div>
+                </fieldset>
+              </form>
+            </section>
+
+            <section class="operation-form-panel" data-operation-panel="store" aria-labelledby="store-operation-title" hidden>
+              <form class="editor-form operation-form" id="store-operation-form">
+                <div class="form-heading"><div><p class="section-kicker">UBICACIÓN INICIAL</p><h2 id="store-operation-title">Asignar posición</h2></div></div>
+                <fieldset class="operation-fieldset" id="store-operation-fields">
+                  <legend class="sr-only">Datos para asignar una posición inicial</legend>
+                  <label class="form-field" for="store-unit">Unidad recibida
+                    <select id="store-unit" required><option value="">Selecciona una unidad recibida</option></select>
+                  </label>
+                  <p class="form-hint" id="store-unit-summary">Selecciona una unidad para revisar sus productos.</p>
+                  <label class="form-field" for="store-destination">Posición activa y libre
+                    <select id="store-destination" required><option value="">Selecciona una posición</option></select>
+                  </label>
+                  <div class="form-actions"><button class="primary-button" id="store-submit" type="submit">Asignar posición</button></div>
+                </fieldset>
+              </form>
+            </section>
+
+            <section class="operation-form-panel" data-operation-panel="move" aria-labelledby="move-operation-title" hidden>
+              <form class="editor-form operation-form" id="move-operation-form">
+                <div class="form-heading"><div><p class="section-kicker">CAMBIO DE UBICACIÓN</p><h2 id="move-operation-title">Trasladar unidad</h2></div></div>
+                <fieldset class="operation-fieldset" id="move-operation-fields">
+                  <legend class="sr-only">Datos para trasladar una unidad</legend>
+                  <label class="form-field" for="move-unit">Unidad almacenada
+                    <select id="move-unit" required><option value="">Selecciona una unidad almacenada</option></select>
+                  </label>
+                  <p class="form-hint" id="move-origin-summary">El origen se obtiene desde el estado guardado.</p>
+                  <label class="form-field" for="move-destination">Nueva posición activa y libre
+                    <select id="move-destination" required><option value="">Selecciona una posición</option></select>
+                  </label>
+                  <div class="form-actions"><button class="primary-button" id="move-submit" type="submit">Confirmar traslado</button></div>
+                </fieldset>
+              </form>
+            </section>
+
+            <section class="operation-form-panel" data-operation-panel="dispatch" aria-labelledby="dispatch-operation-title" hidden>
+              <form class="editor-form operation-form" id="dispatch-operation-form">
+                <div class="form-heading"><div><p class="section-kicker">SALIDA DE MERCADERÍA</p><h2 id="dispatch-operation-title">Despachar unidad</h2></div></div>
+                <fieldset class="operation-fieldset" id="dispatch-operation-fields">
+                  <legend class="sr-only">Datos para despachar una unidad</legend>
+                  <label class="form-field" for="dispatch-unit">Unidad almacenada
+                    <select id="dispatch-unit" required><option value="">Selecciona una unidad almacenada</option></select>
+                  </label>
+                  <p class="form-hint" id="dispatch-origin-summary">La posición de origen se obtiene desde el estado guardado.</p>
+                  <p class="form-hint">Al confirmar, la unidad quedará despachada y su posición se liberará.</p>
+                  <div class="form-actions"><button class="primary-button danger-button" id="dispatch-submit" type="submit">Confirmar despacho</button></div>
+                </fieldset>
+              </form>
+            </section>
+          </div>
+
+          <aside class="operation-result-panel" aria-labelledby="operation-result-title">
+            <p class="detail-kicker">RESULTADO Y TRAZABILIDAD</p>
+            <h2 id="operation-result-title">Última operación</h2>
+            <p class="module-status" id="operation-result-status">Aquí aparecerá el resultado confirmado por Rust.</p>
+            <button class="secondary-button operation-retry" id="operation-retry" type="button" hidden>Verificar / reintentar la misma operación</button>
+            <dl class="detail-list" id="operation-history-details" hidden></dl>
+            <p class="detail-muted" id="operation-history-note">El resumen se consulta por IPC después de confirmar. La cronología completa se añadirá en la vista de historial.</p>
           </aside>
         </div>
       </section>

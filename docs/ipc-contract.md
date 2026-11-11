@@ -35,6 +35,7 @@ La interfaz llama a las funciones exportadas en `src/lib/ipc.ts`. Rust registra 
 | `get_handling_unit` | `identifier` (ID o etiqueta) | Unidad con líneas o `null` |
 | `list_handling_units` | `includeDispatched` | Unidades ordenadas por etiqueta |
 | `receive_unit` | `id`, `label`, `lines`, `eventId`, `occurredAtMs` | `eventId` y resultado `applied` o `duplicate` |
+| `store_unit` | `eventId`, `handlingUnitId`, `destinationLocationId`, `occurredAtMs` | Asignación inicial de posición y resultado |
 | `move_unit` | `eventId`, `handlingUnitId`, `originLocationId`, `destinationLocationId`, `occurredAtMs` | `eventId` y resultado |
 | `dispatch_unit` | `eventId`, `handlingUnitId`, `originLocationId`, `occurredAtMs` | `eventId` y resultado |
 | `record_movement_correction` | `correctionId`, `handlingUnitId`, `correctsEventId`, `reason`, `occurredAtMs` | `correctionId` y resultado |
@@ -48,7 +49,7 @@ Cuando una operación falla, la promesa de `invoke` se rechaza con `{ code, mess
 
 Los detalles internos, como errores SQLite, se escriben en `logs/ariadna.log`; no se incluyen en los mensajes IPC. Una operación rechazada no confirma cambios parciales.
 
-Después de crear, actualizar o desactivar una ubicación, y después de una recepción, traslado o despacho confirmados, el wrapper emite el evento de ventana `ariadna:inventory-changed`. Las vistas que dependen de la jerarquía o la ocupación, como el mapa lógico de ARD-11, lo escuchan para volver a consultar ubicaciones y unidades persistidas. El evento no se emite si el comando falla. Los cambios de productos no modifican la ocupación ni requieren refrescar el mapa.
+Después de crear, actualizar o desactivar una ubicación, y después de una recepción, asignación inicial, traslado o despacho confirmados, el wrapper emite el evento de ventana `ariadna:inventory-changed`. Las vistas que dependen de la jerarquía o la ocupación, como el mapa lógico de ARD-11, lo escuchan para volver a consultar ubicaciones y unidades persistidas. El evento no se emite si el comando falla. Los cambios de productos no modifican la ocupación ni requieren refrescar el mapa.
 
 ## Verificación
 

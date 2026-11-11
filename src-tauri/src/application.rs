@@ -532,6 +532,36 @@ impl DispatchUnit {
     }
 }
 
+pub struct StoreUnit {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl StoreUnit {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        event_id: &str,
+        handling_unit_id: &str,
+        destination_location_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+    ) -> Result<EventOutcome, ApplicationError> {
+        let event = MovementEvent::new(
+            event_id,
+            handling_unit_id,
+            MovementKind::Stored,
+            None::<&str>,
+            Some(destination_location_id),
+            occurred_at_ms,
+            source,
+        )?;
+        Ok(self.repository.record_movement(&event).await?)
+    }
+}
+
 pub struct MoveUnit {
     repository: Arc<dyn InventoryRepository>,
 }

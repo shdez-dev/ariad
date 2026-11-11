@@ -32,6 +32,7 @@ pub fn run() {
             ipc::get_handling_unit,
             ipc::list_handling_units,
             ipc::receive_unit,
+            ipc::store_unit,
             ipc::move_unit,
             ipc::dispatch_unit,
             ipc::record_movement_correction,

@@ -1,22 +1,25 @@
 import "./views/warehouse-map-view";
 import { mountLocationsView } from "./views/locations-view";
+import { mountOperationsView } from "./views/operations-view";
 import { mountProductsView } from "./views/products-view";
 import { mountUnitsView } from "./views/units-view";
 
 document.documentElement.dataset.app = "ariadna";
 
-type ViewName = "map" | "products" | "locations" | "units";
+type ViewName = "map" | "products" | "locations" | "units" | "operations";
 
 const viewElements = new Map<ViewName, HTMLElement>([
   ["map", requiredElement<HTMLElement>("#view-map")],
   ["products", requiredElement<HTMLElement>("#view-products")],
   ["locations", requiredElement<HTMLElement>("#view-locations")],
   ["units", requiredElement<HTMLElement>("#view-units")],
+  ["operations", requiredElement<HTMLElement>("#view-operations")],
 ]);
 const navButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-view-button]")];
 const productsView = mountProductsView();
 const locationsView = mountLocationsView();
 const unitsView = mountUnitsView();
+const operationsView = mountOperationsView();
 let activeView: ViewName = "map";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -37,6 +40,7 @@ async function activateView(viewName: ViewName): Promise<void> {
   if (viewName === "products") await productsView.refresh();
   if (viewName === "locations") await locationsView.refresh();
   if (viewName === "units") await unitsView.refresh();
+  if (viewName === "operations") await operationsView.refresh();
 }
 
 for (const button of navButtons) {

@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-03 a ARD-10 proporcionan el núcleo Rust/SQLite y 17 comandos IPC tipados. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas: agrupa zona, pasillo, rack y posición, muestra disponibilidad y abre el detalle del pallet seleccionado. ARD-12 incorpora navegación, formularios para productos y ubicaciones, y consulta de unidades. La vista no infiere geometría ni usa hardware. La recepción, los traslados y el despacho visuales corresponden a ARD-13; la búsqueda transversal, el historial y las alertas se completan en ARD-14.
+ARD-10 proporciona 17 comandos IPC tipados; ARD-13 agrega `store_unit` para registrar la asignación inicial, con 18 comandos en total. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas. ARD-12 incorpora navegación, formularios de productos y ubicaciones, y consulta de unidades. ARD-13 está en curso con recepción, asignación, traslado y despacho desde la interfaz. La vista no infiere geometría ni usa hardware. La búsqueda transversal, la cronología completa y las alertas se completan en ARD-14.
 
 ## Requisitos del entorno
 
@@ -55,8 +55,8 @@ Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectur
 ## Trabajo siguiente
 
 1. Cerrar la aceptación visual de ARD-11 y ARD-12 en la ventana Tauri.
-2. Publicar ARD-12 después de completar la verificación automatizada y actualizar su evidencia.
-3. Implementar ARD-13 para ejecutar recepción, traslado y despacho desde la interfaz.
+2. Completar la verificación y publicar ARD-13 en GitHub.
+3. Implementar ARD-14 para búsqueda, historial cronológico y alertas.
 
 ## Verificación local
 
@@ -69,5 +69,5 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 está publicada en `feat/ard-11-location-map`, commit `23ac1ff`. ARD-12 se desarrolla en `feat/ard-12-catalog-units`. El build y las 3 pruebas del modelo de mapa y 3 del catálogo pasan; las 42 pruebas Rust, formato y Clippy también pasan en la base Rust sin cambios de esta tarjeta. Los modelos cubren jerarquía, ocupación, inactividad, conflictos, filtros y selección de padres compatibles. La app Tauri se inició con una base SQLite temporal limpia. La inspección visual de ARD-11/12 y la aceptación de flujos completos quedan pendientes.
+ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; y ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`. ARD-13 se desarrolla en `feat/ard-13-operations` e incorpora el comando `store_unit`, además de recepción, asignación inicial, traslado, despacho y resumen del historial por IPC. Pasan `npm run build`, 3 pruebas de mapa, 4 pruebas de modelo de catálogo/operaciones, 43 pruebas Rust, formato, Clippy y `git diff --check`. La app Tauri inició con una configuración de smoke y un identificador de datos aislado (`com.ariadna.inventory.ard13smoke`). La inspección visual de ARD-11/12 y la aceptación manual de ARD-13 siguen pendientes.
 

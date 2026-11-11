@@ -6,7 +6,7 @@ use crate::{
         ApplicationError, CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct,
         DispatchUnit, EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
         ListHandlingUnits, ListLocations, ListProducts, MoveUnit, ReceiveLine, ReceiveUnit,
-        RecordCorrection, UpdateLocation, UpdateProduct, map_error_for_ui,
+        RecordCorrection, StoreUnit, UpdateLocation, UpdateProduct, map_error_for_ui,
     },
     diagnostic_log::DiagnosticLog,
     domain::{DomainError, HandlingUnit, Location, LocationKind, Product},
@@ -512,6 +512,31 @@ pub async fn move_unit(
                 &event_id,
                 &handling_unit_id,
                 &origin_location_id,
+                &destination_location_id,
+                occurred_at_ms,
+                DESKTOP_SOURCE,
+            )
+            .await,
+    )?;
+    Ok(MovementWriteResponse::new(event_id, outcome))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn store_unit(
+    state: State<'_, AppState>,
+    event_id: String,
+    handling_unit_id: String,
+    destination_location_id: String,
+    occurred_at_ms: i64,
+) -> Result<MovementWriteResponse, IpcError> {
+    let use_case = StoreUnit::new(state.inventory_repository.clone());
+    let outcome = expose(
+        &state,
+        "ipc.movement.store",
+        use_case
+            .execute(
+                &event_id,
+                &handling_unit_id,
                 &destination_location_id,
                 occurred_at_ms,
                 DESKTOP_SOURCE,

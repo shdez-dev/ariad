@@ -1055,7 +1055,7 @@ mod tests {
         CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
         EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
         InventoryRepository, ListHandlingUnits, ListLocations, ListProducts, MoveUnit, ReceiveLine,
-        ReceiveUnit, RecordCorrection, UpdateLocation, UpdateProduct,
+        ReceiveUnit, RecordCorrection, StoreUnit, UpdateLocation, UpdateProduct,
     };
     use crate::domain::{MovementKind, Sku};
     use std::sync::Arc;
@@ -2233,6 +2233,104 @@ mod tests {
                 Some("position-2".to_owned())
             )
         );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn store_unit_assigns_a_received_unit_to_a_position_idempotently() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-STORE", "Producto", "unidad")
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-store",
+                "PALLET-STORE",
+                vec![receipt_line("SKU-STORE", 2, None)],
+                "event-store-received",
+                1_800_000_000_000,
+                "manual",
+            )
+            .await
+            .unwrap();
+        ReceiveUnit::new(repository.clone())
+            .execute(
+                "unit-store-blocked",
+                "PALLET-STORE-BLOCKED",
+                vec![receipt_line("SKU-STORE", 1, None)],
+                "event-store-received-blocked",
+                1_800_000_000_002,
+                "manual",
+            )
+            .await
+            .unwrap();
+
+        let store_unit = StoreUnit::new(repository.clone());
+        let input = (
+            "event-unit-stored",
+            "unit-store",
+            "position-1",
+            1_800_000_000_001,
+            "manual",
+        );
+        assert_eq!(
+            store_unit
+                .execute(input.0, input.1, input.2, input.3, input.4)
+                .await
+                .unwrap(),
+            EventOutcome::Applied
+        );
+        assert_eq!(
+            store_unit
+                .execute(input.0, input.1, input.2, input.3, input.4)
+                .await
+                .unwrap(),
+            EventOutcome::Duplicate
+        );
+        assert!(matches!(
+            store_unit
+                .execute(
+                    "event-store-occupied-position",
+                    "unit-store-blocked",
+                    "position-1",
+                    1_800_000_000_003,
+                    "manual",
+                )
+                .await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::PositionOccupied
+            ))
+        ));
+
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-store'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-1".to_owned())));
+        let event: (String, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT kind, origin_location_id, destination_location_id FROM movement_events WHERE event_id = 'event-unit-stored'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            event,
+            ("stored".to_owned(), None, Some("position-1".to_owned()))
+        );
+        let blocked_state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-store-blocked'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(blocked_state, ("received".to_owned(), None));
         database.close().await;
     }
 

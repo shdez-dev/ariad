@@ -3,12 +3,15 @@ import test from "node:test";
 
 import type { HandlingUnitDto, LocationDto, ProductDto } from "../src/lib/ipc.ts";
 import {
+  activePositions,
   availableLocationParents,
   filterHandlingUnits,
   filterLocations,
   filterProducts,
   getLocationPath,
   requiredLocationParentKind,
+  storedUnits,
+  unitsAwaitingStorage,
 } from "../src/lib/catalog-model.ts";
 
 const products: ProductDto[] = [
@@ -49,4 +52,16 @@ test("construye rutas de ubicación y limita el padre al nivel activo compatible
   assert.deepEqual(availableLocationParents("rack", locations).map((location) => location.id), ["a1"]);
   assert.deepEqual(availableLocationParents("zone", locations), []);
   assert.equal(requiredLocationParentKind("position"), "rack");
+});
+
+test("ofrece unidades según su estado y solo posiciones activas como destinos", () => {
+  const candidates: HandlingUnitDto[] = [
+    { id: "received", label: "RECIBIDO", status: "received", currentLocationId: null, lines: [] },
+    { id: "stored", label: "ALMACENADO", status: "stored", currentLocationId: "p1", lines: [] },
+    { id: "dispatched", label: "DESPACHADO", status: "dispatched", currentLocationId: null, lines: [] },
+    { id: "inconsistent", label: "RECIBIDO-CON-UBICACIÓN", status: "received", currentLocationId: "p1", lines: [] },
+  ];
+  assert.deepEqual(unitsAwaitingStorage(candidates).map((unit) => unit.id), ["received"]);
+  assert.deepEqual(storedUnits(candidates).map((unit) => unit.id), ["stored"]);
+  assert.deepEqual(activePositions(locations).map((location) => location.id), ["p1"]);
 });

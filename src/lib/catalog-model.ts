@@ -52,6 +52,22 @@ export function filterHandlingUnits(units: HandlingUnitDto[], query: string): Ha
   );
 }
 
+export function unitsAwaitingStorage(units: HandlingUnitDto[]): HandlingUnitDto[] {
+  return units.filter((unit) => unit.status === "received" && unit.currentLocationId === null);
+}
+
+export function storedUnits(units: HandlingUnitDto[]): HandlingUnitDto[] {
+  return units.filter((unit) => unit.status === "stored" && unit.currentLocationId !== null);
+}
+
+export function activePositions(locations: LocationDto[]): LocationDto[] {
+  return locations
+    .filter((location) => location.kind === "position" && location.active)
+    .sort((left, right) =>
+      left.code.localeCompare(right.code, "es", { numeric: true, sensitivity: "base" }),
+    );
+}
+
 export function getLocationPath(
   location: LocationDto | null | undefined,
   locations: LocationDto[],

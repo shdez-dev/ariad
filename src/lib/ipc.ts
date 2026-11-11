@@ -169,6 +169,12 @@ export const inventoryIpc = {
     eventId: string;
     occurredAtMs: number;
   }) => callInventoryChange<MovementWriteDto>("receive_unit", input),
+  storeUnit: (input: {
+    eventId: string;
+    handlingUnitId: string;
+    destinationLocationId: string;
+    occurredAtMs: number;
+  }) => callInventoryChange<MovementWriteDto>("store_unit", input),
   moveUnit: (input: {
     eventId: string;
     handlingUnitId: string;
