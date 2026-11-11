@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-18 tienen incrementos de implementación publicados; ARD-19 revisa capacidades y entradas de Tauri; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite y ARD-19 aporta controles de seguridad y validación.
+Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-19 tienen incrementos de implementación publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite y ARD-19 aporta controles de seguridad y validación.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -66,12 +66,12 @@ ARD-17 añade pruebas unitarias para límites de productos, jerarquías y datos 
 
 ARD-18 añade pruebas de integración para rollback después de una escritura parcial de recepción y cuando falla la inserción de una alerta vinculada a un traslado. También cierra y reabre la misma base temporal y vuelve a consultar producto, unidad, líneas, ubicación, historial y alerta. Las pruebas existentes cubren migraciones en base limpia y actualización desde la versión anterior, restricciones relevantes e idempotencia de recepción y movimiento. En conjunto pasan 68 pruebas Rust; también pasan `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings`. Publicada en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`.
 
-La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. El siguiente trabajo de implementación según el backlog es ARD-19, revisión de seguridad y capacidades de Tauri.
+La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. ARD-19 completó la revisión de seguridad y capacidades de Tauri; el siguiente trabajo según el backlog es ARD-20, configurar CI.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
 
 ## Evidencia de ARD-19
 
-ARD-19 limita la capacidad de la ventana principal a los 22 comandos IPC usados por el frontend y aplica una CSP para recursos locales e IPC de Tauri. El backend limita la búsqueda y el lote a 120 caracteres y cada recepción a 100 líneas; SQLx usa parámetros enlazados. La inspección no encontró API HTTP de negocio, permisos generales de filesystem o shell, credenciales ni dependencias directas de servidor o cliente HTTP. La evidencia detallada se mantiene en `docs/revision-seguridad-ARD-19.md`.
+ARD-19 limita la capacidad de la ventana principal a los 22 comandos IPC usados por el frontend y aplica una CSP para recursos locales e IPC de Tauri. El backend limita la búsqueda y el lote a 120 caracteres y cada recepción a 100 líneas; SQLx usa parámetros enlazados. La inspección no encontró API HTTP de negocio, permisos generales de filesystem o shell, credenciales ni dependencias directas de servidor o cliente HTTP. Publicada en `feat/ard-19-tauri-security`, commit `8b5ea7c`. La evidencia detallada se mantiene en `docs/revision-seguridad-ARD-19.md`.
 
-Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnings`, `npm run build`, las 14 pruebas frontend y `npm run tauri -- build --no-bundle`. La comprobación del manifiesto confirma que los 22 comandos registrados están permitidos y que no hay permisos adicionales. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes.
+Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnings`, `npm run build`, las 14 pruebas frontend y `npm run tauri -- build --no-bundle`. La comprobación del manifiesto confirma que los 22 comandos registrados están permitidos y que no hay permisos adicionales. El siguiente incremento es ARD-20, configurar CI. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes.
