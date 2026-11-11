@@ -1324,7 +1324,7 @@ mod tests {
         RunSimulation, SearchInventory, SimulationScenario, StoreUnit, UpdateLocation,
         UpdateProduct,
     };
-    use crate::domain::{AlertStatus, MovementKind, Sku};
+    use crate::domain::{AlertIntent, AlertStatus, MovementKind, Sku};
     use std::sync::Arc;
 
     async fn insert_location_tree(pool: &SqlitePool) {
@@ -1860,6 +1860,75 @@ mod tests {
             event,
             ("received".to_owned(), "accepted".to_owned(), None, None)
         );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn failed_receipt_event_insert_rolls_back_unit_and_lines() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        let repository: Arc<dyn InventoryRepository> =
+            Arc::new(SqliteInventoryRepository::new(&database));
+        CreateProduct::new(repository.clone())
+            .execute("SKU-RECEIPT-ROLLBACK", "Producto", "unidad")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_receipt_event BEFORE INSERT ON movement_events WHEN NEW.event_id = 'receipt-forced-failure' BEGIN SELECT RAISE(ABORT, 'forced_failure'); END",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let result = ReceiveUnit::new(repository)
+            .execute(
+                "unit-receipt-rollback",
+                "PALLET-RECEIPT-ROLLBACK",
+                vec![receipt_line(
+                    "SKU-RECEIPT-ROLLBACK",
+                    2,
+                    Some("LOT-ROLLBACK"),
+                )],
+                "receipt-forced-failure",
+                1_800_000_000_000,
+                "test",
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::Storage(_)
+            ))
+        ));
+
+        let unit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_units WHERE id = 'unit-receipt-rollback'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let line_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handling_unit_lines WHERE handling_unit_id = 'unit-receipt-rollback'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'receipt-forced-failure'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let attempt_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_attempts WHERE event_id = 'receipt-forced-failure'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(unit_count, 0);
+        assert_eq!(line_count, 0);
+        assert_eq!(event_count, 0);
+        assert_eq!(attempt_count, 0);
         database.close().await;
     }
 
@@ -2770,6 +2839,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_alert_insert_rolls_back_movement_and_inventory_update() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let pool = database.pool();
+        insert_location_tree(pool).await;
+        sqlx::query("INSERT INTO handling_units (id, label, status, current_location_id) VALUES ('unit-alert-rollback', 'PALLET-ALERT-ROLLBACK', 'stored', 'position-1')")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER fail_alert_insert BEFORE INSERT ON alerts WHEN NEW.id = 'alert-forced-failure-event' BEGIN SELECT RAISE(ABORT, 'forced_failure'); END",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let repository = SqliteInventoryRepository::new(&database);
+        let intent = AlertIntent::new("alert-forced-failure", "test", 1_800_000_000_001).unwrap();
+
+        assert!(matches!(
+            repository
+                .record_movement_with_alert(
+                    &movement(
+                        "event-alert-forced-failure",
+                        "unit-alert-rollback",
+                        MovementKind::Moved,
+                        Some("position-1"),
+                        Some("position-2"),
+                    ),
+                    &intent,
+                )
+                .await,
+            Err(RepositoryError::Storage(_))
+        ));
+
+        let state: (String, Option<String>) = sqlx::query_as(
+            "SELECT status, current_location_id FROM handling_units WHERE id = 'unit-alert-rollback'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_events WHERE event_id = 'event-alert-forced-failure'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let alert_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM alerts WHERE id = 'alert-forced-failure-event'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let attempt_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM movement_attempts WHERE event_id = 'event-alert-forced-failure'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(state, ("stored".to_owned(), Some("position-1".to_owned())));
+        assert_eq!(event_count, 0);
+        assert_eq!(alert_count, 0);
+        assert_eq!(attempt_count, 0);
+        database.close().await;
+    }
+
+    #[tokio::test]
     async fn concurrent_retry_of_same_movement_returns_applied_and_duplicate() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -3454,6 +3588,105 @@ mod tests {
         assert_eq!(migration_count, 3);
 
         copied.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn inventory_and_history_persist_after_reopening_the_same_database_file() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-reopen-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("inventory.sqlite3");
+
+        {
+            let database = SqliteDatabase::open(&path).await.unwrap();
+            let repository = SqliteInventoryRepository::new(&database);
+            repository
+                .insert_product(&Product::new("SKU-REOPEN", "Caja persistida", "unidad").unwrap())
+                .await
+                .unwrap();
+            insert_location_tree(database.pool()).await;
+            let unit = HandlingUnit::new(
+                "unit-reopen",
+                "PALLET-REOPEN",
+                vec![HandlingUnitLine::new("SKU-REOPEN", 4, Some("LOT-REOPEN")).unwrap()],
+            )
+            .unwrap();
+            repository
+                .receive_unit(
+                    &unit,
+                    &movement(
+                        "event-reopen-received",
+                        "unit-reopen",
+                        MovementKind::Received,
+                        None,
+                        None,
+                    ),
+                )
+                .await
+                .unwrap();
+            let store_event = movement(
+                "event-reopen-stored",
+                "unit-reopen",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            );
+            let alert_intent =
+                AlertIntent::new("alert-reopen", "persisted_test", 1_800_000_000_001).unwrap();
+            let movement_result = repository
+                .record_movement_with_alert(&store_event, &alert_intent)
+                .await
+                .unwrap();
+            assert_eq!(
+                movement_result.alert_id.as_deref(),
+                Some("alert-reopen-event")
+            );
+            database.close().await;
+        }
+
+        {
+            let database = SqliteDatabase::open(&path).await.unwrap();
+            let repository: Arc<dyn InventoryRepository> =
+                Arc::new(SqliteInventoryRepository::new(&database));
+            let product = GetProduct::new(repository.clone())
+                .execute("SKU-REOPEN")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(product.description, "Caja persistida");
+
+            let unit = GetHandlingUnit::new(repository.clone())
+                .execute("PALLET-REOPEN")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(unit.status, HandlingUnitStatus::Stored);
+            assert_eq!(unit.current_location_id.as_deref(), Some("position-1"));
+            assert_eq!(unit.lines[0].quantity, 4);
+            assert_eq!(unit.lines[0].lot_code.as_deref(), Some("LOT-REOPEN"));
+
+            let history = GetMovementHistory::new(repository.clone())
+                .execute("unit-reopen")
+                .await
+                .unwrap();
+            assert_eq!(history.len(), 2);
+            assert_eq!(history[0].event_id, "event-reopen-received");
+            assert_eq!(history[1].event_id, "event-reopen-stored");
+
+            let alerts = ListAlerts::new(repository).execute().await.unwrap();
+            assert_eq!(alerts.len(), 1);
+            assert_eq!(alerts[0].alert.id, "alert-reopen-event");
+            assert_eq!(
+                alerts[0].alert.target.movement_event_id(),
+                Some("event-reopen-stored")
+            );
+            database.close().await;
+        }
+
         std::fs::remove_dir_all(directory).unwrap();
     }
 
