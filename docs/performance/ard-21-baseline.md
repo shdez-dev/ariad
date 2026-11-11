@@ -41,26 +41,27 @@ El movimiento añade 111 eventos de medición (10 calentamientos y 101 muestras)
 | SQLite | 3.51.3 |
 | Aplicación | Ariadna 0.1.0 |
 | Ubicación de las bases | Carpeta temporal local de Windows |
+| Revisión medida | `3acb83948047` |
 
 ## Resultados
 
-Se hicieron tres ejecuciones independientes con la misma configuración y la misma carga. La tabla principal muestra la mediana de los tres p50 y la mediana de los tres p95. La columna de rango expone la variación observada entre ejecuciones.
+Se hicieron tres ejecuciones independientes con la misma configuración, la misma carga y el mismo commit. La tabla principal muestra la mediana de los tres p50 y la mediana de los tres p95. La columna de rango expone la variación observada entre ejecuciones. Los informes originales incluyen commit, compilador y hardware capturados por el programa: [repetición 1](evidence/ard-21-run-01.md), [repetición 2](evidence/ard-21-run-02.md) y [repetición 3](evidence/ard-21-run-03.md).
 
 | Operación | Mediana p50 (ms) | Mediana p95 (ms) | Rango p95 (ms) | Meta p95 |
 | --- | ---: | ---: | ---: | --- |
-| Búsqueda transversal | 6,067 | 18,126 | 17,252 a 26,443 | Cumple, <= 2.000 ms |
-| Historial por unidad | 0,305 | 0,410 | 0,389 a 1,740 | Cumple, <= 2.000 ms |
-| Movimiento SQLite | 2,646 | 6,593 | 3,087 a 60,323 | Cumple, <= 2.000 ms |
+| Búsqueda transversal | 6,744 | 10,057 | 8,442 a 25,883 | Cumple, <= 2.000 ms |
+| Historial por unidad | 0,345 | 0,561 | 0,469 a 0,565 | Cumple, <= 2.000 ms |
+| Movimiento SQLite | 2,519 | 7,255 | 3,346 a 191,665 | Cumple, <= 2.000 ms |
 
 Resultados p50/p95 de cada repetición:
 
 | Repetición | Búsqueda (ms) | Historial (ms) | Movimiento (ms) |
 | --- | --- | --- | --- |
-| 1 | 6,067 / 18,126 | 1,005 / 1,740 | 34,837 / 60,323 |
-| 2 | 6,019 / 17,252 | 0,305 / 0,389 | 2,646 / 6,593 |
-| 3 | 6,329 / 26,443 | 0,289 / 0,410 | 1,853 / 3,087 |
+| [1](evidence/ard-21-run-01.md) | 11,258 / 25,883 | 0,292 / 0,561 | 2,519 / 7,255 |
+| [2](evidence/ard-21-run-02.md) | 6,744 / 8,442 | 0,345 / 0,469 | 59,470 / 191,665 |
+| [3](evidence/ard-21-run-03.md) | 6,005 / 10,057 | 0,389 / 0,565 | 2,002 / 3,346 |
 
-La meta provisional de p95 <= 2 s se cumple en las tres repeticiones. El mayor p95 observado fue 60,323 ms en movimientos. Las mediciones muestran dispersión, pero no aíslan su causa; los rangos se conservan para que el resultado no se reduzca a una sola corrida.
+La meta provisional de p95 <= 2 s se cumple en las tres repeticiones. El mayor p95 observado fue 191,665 ms en movimientos. Las mediciones muestran dispersión, pero no aíslan su causa; los rangos y los tres informes se conservan para que el resultado no se reduzca a una sola corrida.
 
 ## Reproducir
 
