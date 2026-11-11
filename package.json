@@ -9,6 +9,7 @@
     "test:catalog": "node --experimental-strip-types --test tests/catalog-model.test.ts",
     "test:simulator": "node --experimental-strip-types --test tests/simulator-model.test.ts",
     "test:ipc": "node --experimental-strip-types --test tests/ipc-error.test.ts",
+    "test:accessibility": "node --experimental-strip-types --test tests/ui-accessibility.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

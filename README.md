@@ -57,7 +57,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 ## Trabajo siguiente
 
-1. Revisar manualmente el instalador NSIS y el informe del artefacto de CI para cerrar ARD-22.
+1. Repetir la carga del artefacto de ARD-22, inspeccionar el instalador actual y cotejar su hash, informe y firma.
 2. Completar y registrar los criterios visuales pendientes de ARD-11 a ARD-15 en la ventana Tauri: teclado, CRUD/errores/estados vacíos, rechazos operativos y escenarios del simulador.
 3. Ejecutar ARD-23: documentar operación, copia y restauración de SQLite, y validar el procedimiento con una restauración de prueba.
 4. Ejecutar ARD-24: preparar la guía pública de instalación y demostración para portfolio con límites y versiones verificables.
@@ -72,6 +72,7 @@ npm run test:map
 npm run test:catalog
 npm run test:simulator
 npm run test:ipc
+npm run test:accessibility
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

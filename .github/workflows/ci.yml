@@ -57,6 +57,9 @@ jobs:
       - name: Test IPC errors
         run: npm run test:ipc
 
+      - name: Test UI accessibility labels
+        run: npm run test:accessibility
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
