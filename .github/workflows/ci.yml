@@ -69,5 +69,26 @@ jobs:
       - name: Test performance benchmark
         run: cargo test --manifest-path src-tauri/Cargo.toml --example ard21_benchmark
 
-      - name: Build Tauri desktop executable
-        run: npm run tauri -- build --no-bundle
+      - name: Build Tauri Windows installer
+        run: npm run tauri -- build
+
+      - name: Verify NSIS install, launch, and uninstall
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          $installers = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
+          if ($installers.Count -ne 1) { throw "Se esperaba un solo instalador NSIS de Ariadna; se encontraron $($installers.Count)." }
+          $installer = $installers[0]
+          ./scripts/verify-windows-installer.ps1 -InstallerPath $installer.FullName -EvidencePath "$env:RUNNER_TEMP/ariadna-ard-22-verification.md"
+
+      - name: Upload Windows installer and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ariadna-windows-nsis-${{ github.sha }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*-setup.exe
+            ${{ runner.temp }}/ariadna-ard-22-verification.md
+          if-no-files-found: warn
+          retention-days: 14

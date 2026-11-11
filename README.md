@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-10 proporcionó los comandos IPC de catálogo y movimientos; ARD-14 añadió búsqueda, historial y revisión de alertas. ARD-15 incorpora un simulador en proceso con semilla y escenarios reproducibles, persistidos mediante los mismos casos de uso y SQLite. ARD-16 añade registros JSON Lines correlacionados para inicio, cierre y comandos IPC, con duración, códigos de error seguros y rotación limitada. ARD-17 amplía las pruebas unitarias del dominio y ARD-18 añade cobertura de rollback y persistencia tras reabrir SQLite. ARD-19 limita los permisos de Tauri a 22 comandos, añade una CSP restrictiva y valida límites de búsqueda y recepción en Rust. ARD-20 configura CI en Windows para pruebas de frontend y Rust, formato, Clippy y compilación Tauri. ARD-21 incorpora un benchmark local reproducible y documenta latencias con datos sintéticos. No se usan robots ni lectores físicos.
+ARD-10 proporcionó los comandos IPC de catálogo y movimientos; ARD-14 añadió búsqueda, historial y revisión de alertas. ARD-15 incorpora un simulador en proceso con semilla y escenarios reproducibles, persistidos mediante los mismos casos de uso y SQLite. ARD-16 añade registros JSON Lines correlacionados para inicio, cierre y comandos IPC, con duración, códigos de error seguros y rotación limitada. ARD-17 amplía las pruebas unitarias del dominio y ARD-18 añade cobertura de rollback y persistencia tras reabrir SQLite. ARD-19 limita los permisos de Tauri a 22 comandos, añade una CSP restrictiva y valida límites de búsqueda y recepción en Rust. ARD-20 configura CI en Windows para pruebas de frontend y Rust, formato, Clippy y compilación Tauri. ARD-21 incorpora un benchmark local reproducible y documenta latencias con datos sintéticos. ARD-22 genera un instalador NSIS sin firma y verifica en CI su instalación, inicio, base local y desinstalación. No se usan robots ni lectores físicos.
 
 ## Requisitos del entorno
 
@@ -53,12 +53,12 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md) y la [matriz de trazabilidad](docs/trazabilidad.md).
 
-El workflow de integración continua valida cada push y pull request en Windows. El primer run de ARD-20 pasó con el commit `202772a7a3026588494700b6a6908bfd1450160f`. Consulta la [guía de CI](docs/continuous-integration.md) para ver los chequeos y sus equivalentes locales.
+El workflow de integración continua valida cada push y pull request en Windows. ARD-22 añade la generación del instalador NSIS, prueba aislada de instalación e inicio, verificación de la base local y desinstalación, además de publicar instalador e informe como artefacto temporal de Actions. Consulta la [guía de CI](docs/continuous-integration.md) y la [guía del instalador Windows](docs/distribution/windows-installer.md) para los chequeos y ubicaciones.
 
 ## Trabajo siguiente
 
 1. Cerrar la aceptación visual manual de ARD-11 a ARD-15 en la ventana Tauri.
-2. Ejecutar ARD-22: generar y validar el instalador de demostración para Windows.
+2. Revisar y publicar el artefacto de demostración y la evidencia de ARD-22.
 3. Continuar con la guía de operación, aceptación de versión candidata y documentación de portfolio.
 
 ## Verificación local
@@ -72,11 +72,10 @@ npm run test:ipc
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-npm run tauri -- build --no-bundle
+npm run tauri -- build
 cargo run --release --manifest-path src-tauri/Cargo.toml --example ard21_benchmark
 ```
 
 La última orden crea una base y un informe sintéticos en la carpeta temporal de Windows. Consulta [la línea base de rendimiento de ARD-21](docs/performance/ard-21-baseline.md) para metodología, resultados y limitaciones.
 
 ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`; ARD-14 en `feat/ard-14-search-history-alerts`, commit `a1925d2`; ARD-15 en `feat/ard-15-simulator`, commit `b8dbf20`; ARD-16 en `feat/ard-16-diagnostics`, commit `ecfee57`; ARD-17 en `feat/ard-17-domain-tests`, commit `1097d5a`; ARD-18 en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`; ARD-19 en `feat/ard-19-tauri-security`, commit `8b5ea7c`; ARD-20 en `feat/ard-20-ci`, commit `202772a`; ARD-21 en `feat/ard-21-performance`, commit `3acb839`. La inspección visual manual de las vistas Tauri continúa pendiente; las pruebas automatizadas no la sustituyen.
-
