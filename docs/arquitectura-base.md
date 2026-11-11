@@ -1,6 +1,6 @@
 # Ariadna: línea base de arquitectura
 
-Estado: línea base de implementación, 10 de noviembre de 2026. Esta decisión concreta las propuestas ADR del documento de Arquitectura y decisiones técnicas de AETHER. El prototipo no está listo para operación productiva.
+Estado: línea base de implementación, 11 de noviembre de 2026. Esta decisión concreta las propuestas ADR del documento de Arquitectura y decisiones técnicas de AETHER. El prototipo no está listo para operación productiva.
 
 ## Decisiones vigentes
 
@@ -49,7 +49,13 @@ ARD-15 añade la vista Simulador para ejecutar los cinco escenarios con una semi
 
 ## Estado de implementación y límites
 
-ARD-10 a ARD-17 se implementaron en incrementos publicados. ARD-15 está en `feat/ard-15-simulator`, commit `b8dbf20`; la migración de alertas mantiene vínculos exactos a eventos e intentos. ARD-16 está publicada en `feat/ard-16-diagnostics`, commit `ecfee57`, y agrega los registros locales descritos arriba. ARD-17, publicada en `feat/ard-17-domain-tests`, commit `1097d5a`, amplía la cobertura unitaria de las reglas del dominio. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente. La aplicación sigue siendo un prototipo local con datos sintéticos, no validado para una operación real de bodega.
+ARD-10 a ARD-18 se implementaron en incrementos publicados. ARD-15 está en `feat/ard-15-simulator`, commit `b8dbf20`; la migración de alertas mantiene vínculos exactos a eventos e intentos. ARD-16 está publicada en `feat/ard-16-diagnostics`, commit `ecfee57`, y agrega los registros locales descritos arriba. ARD-17, publicada en `feat/ard-17-domain-tests`, commit `1097d5a`, amplía la cobertura unitaria de las reglas del dominio. ARD-18, publicada en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`, verifica atomicidad y persistencia SQLite. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente. La aplicación sigue siendo un prototipo local con datos sintéticos, no validado para una operación real de bodega.
 
 Verificación de ARD-17: 65 pruebas Rust, formato, Clippy, compilación TypeScript/Vite y 14 pruebas frontend pasan. La inspección visual manual de las vistas Tauri no forma parte de estas pruebas automatizadas.
+
+## Verificación de ARD-18
+
+ARD-18 añade tres pruebas de integración con SQLite. `failed_receipt_event_insert_rolls_back_unit_and_lines` provoca un error después de insertar la unidad y sus líneas, y verifica que no queden unidad, líneas, evento ni intento parciales. `failed_alert_insert_rolls_back_movement_and_inventory_update` fuerza un fallo al guardar la alerta de un traslado y comprueba que el estado y la ubicación originales se conserven y que no queden evento, alerta ni intento. `inventory_and_history_persist_after_reopening_the_same_database_file` cierra y reabre la misma ruta temporal y comprueba que producto, unidad, líneas, ubicación, movimientos, historial y alerta sigan disponibles.
+
+La cobertura existente ya verifica migraciones desde una base vacía y una base de prueba con esquema anterior, claves únicas, jerarquías, claves foráneas, restricciones, idempotencia y concurrencia. Las bases de prueba son SQLite en memoria o archivos temporales aislados y no requieren servicios externos. En esta revisión pasan 68 pruebas Rust, `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings`. Esta cobertura no sustituye la aceptación visual manual pendiente ni valida el uso productivo.
 

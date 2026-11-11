@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 10 de noviembre de 2026. ARD-10 a ARD-17 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines y ARD-17 amplía las pruebas unitarias de dominio.
+Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-18 tienen incrementos de implementación publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio y ARD-18 verifica atomicidad SQLite y persistencia al reabrir el mismo archivo.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -63,5 +63,9 @@ ARD-14 añade `search_inventory`, `list_alerts` y `mark_alert_reviewed`, mantien
 ARD-16 amplía el registrador local para escribir eventos JSON Lines con `operationId`, comando, resultado, duración y código estable. El ID se devuelve en errores IPC y se muestra junto al mensaje seguro. Los detalles dinámicos de persistencia y los payloads del inventario no se registran. Cada archivo queda limitado a 5 MiB y se conservan hasta tres copias. Publicada en `feat/ard-16-diagnostics`, commit `ecfee57`.
 
 ARD-17 añade pruebas unitarias para límites de productos, jerarquías y datos de ubicación, líneas con lote, estados de unidades, ocupación, eventos, correcciones y alertas. Los escenarios de eventId duplicado y conflicto de contenido siguen comprobados por las pruebas de repositorio SQLite existentes. Publicada en `feat/ard-17-domain-tests`, commit `1097d5a`. Pasan 65 pruebas Rust, fmt, Clippy, `npm run build` y 14 pruebas frontend (3 de mapa, 4 de catálogo, 5 del simulador y 2 de errores IPC). La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente.
+
+ARD-18 añade pruebas de integración para rollback después de una escritura parcial de recepción y cuando falla la inserción de una alerta vinculada a un traslado. También cierra y reabre la misma base temporal y vuelve a consultar producto, unidad, líneas, ubicación, historial y alerta. Las pruebas existentes cubren migraciones en base limpia y actualización desde la versión anterior, restricciones relevantes e idempotencia de recepción y movimiento. En conjunto pasan 68 pruebas Rust; también pasan `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings`. Publicada en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`.
+
+La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. El siguiente trabajo de implementación según el backlog es ARD-19, revisión de seguridad y capacidades de Tauri.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
