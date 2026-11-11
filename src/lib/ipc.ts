@@ -107,7 +107,7 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
-async function callInventoryMovement<T>(
+async function callInventoryChange<T>(
   command: string,
   args: Record<string, unknown>,
 ): Promise<T> {
@@ -149,14 +149,14 @@ export const inventoryIpc = {
     name: string;
     kind: LocationKind;
     parentId?: string | null;
-  }) => call<LocationDto>("create_location", input),
+  }) => callInventoryChange<LocationDto>("create_location", input),
   getLocation: (id: string) => call<LocationDto | null>("get_location", { id }),
   listLocations: (includeInactive = false) =>
     call<LocationDto[]>("list_locations", { includeInactive }),
   updateLocation: (input: { id: string; code: string; name: string }) =>
-    call<LocationDto>("update_location", input),
+    callInventoryChange<LocationDto>("update_location", input),
   deactivateLocation: (id: string) =>
-    call<LocationDto>("deactivate_location", { id }),
+    callInventoryChange<LocationDto>("deactivate_location", { id }),
 
   getHandlingUnit: (identifier: string) =>
     call<HandlingUnitDto | null>("get_handling_unit", { identifier }),
@@ -168,20 +168,20 @@ export const inventoryIpc = {
     lines: ReceiveLineInput[];
     eventId: string;
     occurredAtMs: number;
-  }) => callInventoryMovement<MovementWriteDto>("receive_unit", input),
+  }) => callInventoryChange<MovementWriteDto>("receive_unit", input),
   moveUnit: (input: {
     eventId: string;
     handlingUnitId: string;
     originLocationId: string;
     destinationLocationId: string;
     occurredAtMs: number;
-  }) => callInventoryMovement<MovementWriteDto>("move_unit", input),
+  }) => callInventoryChange<MovementWriteDto>("move_unit", input),
   dispatchUnit: (input: {
     eventId: string;
     handlingUnitId: string;
     originLocationId: string;
     occurredAtMs: number;
-  }) => callInventoryMovement<MovementWriteDto>("dispatch_unit", input),
+  }) => callInventoryChange<MovementWriteDto>("dispatch_unit", input),
   recordMovementCorrection: (input: {
     correctionId: string;
     handlingUnitId: string;

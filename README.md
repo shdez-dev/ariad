@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-03 a ARD-10 proporcionan el núcleo Rust/SQLite y 17 comandos IPC tipados. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas: agrupa zona, pasillo, rack y posición, muestra disponibilidad y abre el detalle del pallet seleccionado. La vista no infiere geometría ni usa hardware. Los formularios de catálogo y los flujos de recepción, traslado y despacho siguen en tarjetas posteriores.
+ARD-03 a ARD-10 proporcionan el núcleo Rust/SQLite y 17 comandos IPC tipados. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas: agrupa zona, pasillo, rack y posición, muestra disponibilidad y abre el detalle del pallet seleccionado. ARD-12 incorpora navegación, formularios para productos y ubicaciones, y consulta de unidades. La vista no infiere geometría ni usa hardware. La recepción, los traslados y el despacho visuales corresponden a ARD-13; la búsqueda transversal, el historial y las alertas se completan en ARD-14.
 
 ## Requisitos del entorno
 
@@ -54,8 +54,8 @@ Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectur
 
 ## Trabajo siguiente
 
-1. Cerrar ARD-11 con una inspección visual del mapa en la ventana Tauri.
-2. Continuar ARD-12 para configurar y consultar productos, ubicaciones y unidades.
+1. Cerrar la aceptación visual de ARD-11 y ARD-12 en la ventana Tauri.
+2. Publicar ARD-12 después de completar la verificación automatizada y actualizar su evidencia.
 3. Implementar ARD-13 para ejecutar recepción, traslado y despacho desde la interfaz.
 
 ## Verificación local
@@ -63,10 +63,11 @@ Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectur
 ```powershell
 npm run build
 npm run test:map
+npm run test:catalog
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`. ARD-11 está en curso en `feat/ard-11-location-map`. `npm run build`, las 3 pruebas del modelo de mapa, `cargo fmt --check`, las 42 pruebas Rust y Clippy pasan sin advertencias. Las pruebas del mapa cubren jerarquía ordenada, ocupación a partir de unidades almacenadas, estados inactivos, ubicaciones huérfanas y conflicto de ocupación. La app Tauri inicia con una base SQLite temporal limpia. La inspección visual del escritorio y la aceptación de flujos completos quedan pendientes.
+ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 está publicada en `feat/ard-11-location-map`, commit `23ac1ff`. ARD-12 se desarrolla en `feat/ard-12-catalog-units`. El build y las 3 pruebas del modelo de mapa y 3 del catálogo pasan; las 42 pruebas Rust, formato y Clippy también pasan en la base Rust sin cambios de esta tarjeta. Los modelos cubren jerarquía, ocupación, inactividad, conflictos, filtros y selección de padres compatibles. La app Tauri se inició con una base SQLite temporal limpia. La inspección visual de ARD-11/12 y la aceptación de flujos completos quedan pendientes.
 
