@@ -22,6 +22,20 @@ use crate::{
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
+// Keep migration 0001 immutable. `b6caed9` shipped a second checksum after adding
+// the reparent trigger; reconcile only that known legacy checksum below.
+const CANONICAL_INITIAL_MIGRATION_CHECKSUM: [u8; 48] = [
+    0xa3, 0xc1, 0xc6, 0xb4, 0x55, 0x43, 0xa9, 0xa0, 0x6d, 0xdc, 0x1f, 0xa1, 0xa7, 0x6d, 0xc5, 0x00,
+    0xf7, 0x41, 0x8c, 0xd0, 0xc0, 0x55, 0xdd, 0x6f, 0x21, 0x49, 0x36, 0xba, 0x71, 0xb7, 0x6e, 0x81,
+    0x5a, 0x95, 0xd6, 0x62, 0x47, 0x8b, 0x31, 0x50, 0x4f, 0xd7, 0x57, 0x8d, 0xa4, 0xe3, 0x4f, 0x56,
+];
+
+const LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM: [u8; 48] = [
+    0xc0, 0x0d, 0x4c, 0x19, 0x7c, 0x67, 0x4d, 0x69, 0x19, 0xc8, 0xcf, 0xe7, 0xe6, 0xb9, 0x62, 0x86,
+    0x28, 0x5d, 0x10, 0x62, 0xdd, 0x11, 0xde, 0xc7, 0x74, 0xb5, 0x92, 0x21, 0xd6, 0xdf, 0xb3, 0x9c,
+    0x07, 0x96, 0xc4, 0xe1, 0x5b, 0x79, 0x2d, 0x61, 0x82, 0x6b, 0x69, 0x92, 0x6b, 0x7f, 0xdf, 0x1b,
+];
+
 #[derive(Clone)]
 pub struct SqliteDatabase {
     pool: SqlitePool,
@@ -33,6 +47,8 @@ pub enum PersistenceError {
     Sqlx(#[from] sqlx::Error),
     #[error("No se pudieron aplicar las migraciones: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
+    #[error("La migración inicial 0001 cambió; agrega una migración nueva en lugar de editarla")]
+    InitialMigrationModified,
     #[error("No se pudo crear la carpeta local de datos: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -42,6 +58,7 @@ impl PersistenceError {
         match self {
             Self::Sqlx(_) => "database.open_failed",
             Self::Migration(_) => "database.migration_failed",
+            Self::InitialMigrationModified => "database.initial_migration_modified",
             Self::Io(_) => "filesystem.initialization_failed",
         }
     }
@@ -70,6 +87,7 @@ impl SqliteDatabase {
             .max_connections(max_connections)
             .connect_with(options)
             .await?;
+        reconcile_legacy_initial_migration_checksum(&pool).await?;
         MIGRATOR.run(&pool).await?;
         Ok(Self { pool })
     }
@@ -89,6 +107,48 @@ impl SqliteDatabase {
     pub async fn close(&self) {
         self.pool.close().await;
     }
+}
+
+async fn reconcile_legacy_initial_migration_checksum(
+    pool: &SqlitePool,
+) -> Result<(), PersistenceError> {
+    let initial_migration = MIGRATOR
+        .iter()
+        .find(|migration| migration.version == 1)
+        .expect("the initial inventory migration must exist");
+    if initial_migration.checksum.as_ref() != CANONICAL_INITIAL_MIGRATION_CHECKSUM {
+        return Err(PersistenceError::InitialMigrationModified);
+    }
+
+    let migrations_table_exists: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if migrations_table_exists.is_none() {
+        return Ok(());
+    }
+
+    let applied_checksum: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT checksum FROM _sqlx_migrations WHERE version = 1 AND success = 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if applied_checksum.as_deref()
+        != Some(LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.as_slice())
+    {
+        return Ok(());
+    }
+
+    sqlx::query(
+        "UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1 AND success = 1 AND checksum = ?",
+    )
+    .bind(CANONICAL_INITIAL_MIGRATION_CHECKSUM.as_slice())
+    .bind(LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.as_slice())
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1327,6 +1387,19 @@ mod tests {
     use crate::domain::{AlertIntent, AlertStatus, MovementKind, Sku};
     use std::sync::Arc;
 
+    #[test]
+    fn initial_inventory_migration_keeps_its_published_checksum() {
+        let migration = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 1)
+            .expect("the initial inventory migration must exist");
+
+        assert_eq!(
+            migration.checksum.as_ref(),
+            CANONICAL_INITIAL_MIGRATION_CHECKSUM.as_slice()
+        );
+    }
+
     async fn insert_location_tree(pool: &SqlitePool) {
         sqlx::query(
             "INSERT INTO locations (id, code, name, kind) VALUES ('zone-1', 'Z1', 'Zona', 'zone')",
@@ -2247,7 +2320,7 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
 
         let product = Product::new("sku-1", "Caja", "unidad").unwrap();
         let repository = SqliteInventoryRepository::new(&database);
@@ -3611,6 +3684,175 @@ mod tests {
         assert_eq!(integrity, "ok");
 
         restored.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_modified_initial_checksum_is_reconciled_without_losing_inventory() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-legacy-migration-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("inventory.sqlite3");
+
+        let database = SqliteDatabase::open(&path).await.unwrap();
+        SqliteInventoryRepository::new(&database)
+            .insert_product(&Product::new("SKU-LEGACY", "Caja conservada", "unidad").unwrap())
+            .await
+            .unwrap();
+        let trigger_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_location_reparent'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(trigger_count, 1);
+
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 4")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1")
+            .bind(LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.to_vec())
+            .execute(database.pool())
+            .await
+            .unwrap();
+        database.close().await;
+
+        let reopened = SqliteDatabase::open(&path).await.unwrap();
+        let product_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku = 'SKU-LEGACY'")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+        let migration_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+        let applied_checksum: Vec<u8> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+        let canonical_checksum = MIGRATOR
+            .iter()
+            .find(|migration| migration.version == 1)
+            .unwrap()
+            .checksum
+            .as_ref();
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(reopened.pool())
+            .await
+            .unwrap();
+        assert_eq!(product_count, 1);
+        assert_eq!(migration_count, 4);
+        assert_eq!(applied_checksum.as_slice(), canonical_checksum);
+        assert_eq!(integrity, "ok");
+        reopened.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unknown_initial_migration_checksum_is_rejected_without_changing_inventory() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-unknown-migration-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("inventory.sqlite3");
+        let unknown_checksum = vec![0xa5; 48];
+
+        let database = SqliteDatabase::open(&path).await.unwrap();
+        SqliteInventoryRepository::new(&database)
+            .insert_product(&Product::new("SKU-UNKNOWN", "Caja conservada", "unidad").unwrap())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1")
+            .bind(unknown_checksum.clone())
+            .execute(database.pool())
+            .await
+            .unwrap();
+        database.close().await;
+
+        assert!(SqliteDatabase::open(&path).await.is_err());
+
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let stored_checksum: Vec<u8> =
+            sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let product_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku = 'SKU-UNKNOWN'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored_checksum, unknown_checksum);
+        assert_eq!(product_count, 1);
+
+        pool.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn new_location_parent_migration_applies_to_an_unchanged_database() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-parent-migration-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("inventory.sqlite3");
+
+        let database = SqliteDatabase::open(&path).await.unwrap();
+        SqliteInventoryRepository::new(&database)
+            .insert_product(&Product::new("SKU-PARENT", "Caja conservada", "unidad").unwrap())
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER prevent_location_reparent")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 4")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        database.close().await;
+
+        let reopened = SqliteDatabase::open(&path).await.unwrap();
+        let product_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku = 'SKU-PARENT'")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+        let trigger_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_location_reparent'",
+        )
+        .fetch_one(reopened.pool())
+        .await
+        .unwrap();
+        let migration_four_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM _sqlx_migrations WHERE version = 4 AND success = 1",
+        )
+        .fetch_one(reopened.pool())
+        .await
+        .unwrap();
+        assert_eq!(product_count, 1);
+        assert_eq!(trigger_count, 1);
+        assert_eq!(migration_four_count, 1);
+        reopened.close().await;
         std::fs::remove_dir_all(directory).unwrap();
     }
 

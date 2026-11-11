@@ -53,6 +53,8 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md), la [matriz de trazabilidad](docs/trazabilidad.md) y la [guía de operación, copias y restauración](docs/operacion/copias-y-restauracion.md).
 
+La [guía de instalación y demostración para portfolio](docs/portfolio/README.md) describe los requisitos, el recorrido funcional, las capturas sintéticas y los límites de esta versión.
+
 El workflow de integración continua valida cada push y pull request en Windows. ARD-22 añade la generación del instalador NSIS, prueba aislada de instalación e inicio, verificación de la base local y desinstalación, además de publicar instalador e informe como artefacto temporal de Actions. Consulta la [guía de CI](docs/continuous-integration.md) y la [guía del instalador Windows](docs/distribution/windows-installer.md) para los chequeos y ubicaciones.
 
 ## Trabajo siguiente
@@ -60,7 +62,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 1. Repetir la carga del artefacto de ARD-22, inspeccionar el instalador actual y cotejar su hash, informe y firma.
 2. Completar y registrar los criterios visuales pendientes de ARD-11 a ARD-15 en la ventana Tauri: teclado, CRUD/errores/estados vacíos, rechazos operativos y escenarios del simulador.
 3. Finalizar ARD-23: probar checkpoint y restauración en una base temporal, y publicar la guía operativa con sus límites explícitos.
-4. Ejecutar ARD-24: preparar la guía pública de instalación y demostración para portfolio con límites y versiones verificables.
+4. Revisar y cerrar ARD-24: [guía de instalación y demostración para portfolio](docs/portfolio/README.md); confirmar su revisión publicada y CI asociado.
 5. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
 6. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
 
