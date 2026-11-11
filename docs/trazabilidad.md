@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 11 de noviembre de 2026. ARD-10 está completada. ARD-11 a ARD-14 tienen incrementos publicados y siguen pendientes de aceptación visual manual. ARD-15 se implementa en `feat/ard-15-simulator`; incorpora simulación determinista, alertas trazadas al registro exacto y apertura desde la interfaz. Su verificación y aceptación visual están pendientes.
+Estado: actualizada el 10 de noviembre de 2026. ARD-10 a ARD-15 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 está en implementación: añade diagnósticos locales JSON Lines con correlación, duración de comandos, minimización de datos y rotación.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -58,6 +58,8 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 
 ## Estado de evidencia
 
-ARD-14 añade `search_inventory`, `list_alerts` y `mark_alert_reviewed`, mantiene el acceso vía IPC y presenta búsqueda, cronología y alertas. ARD-15 añade `run_simulation`, cinco recorridos sintéticos y la migración que admite vínculo exacto a eventos o intentos. Sus alertas se insertan en la misma transacción que el registro causante y la bandeja puede abrir un intento aunque no exista ficha de unidad. Verificación del frontend: `npm run build`, `npm run test:map` (3), `npm run test:catalog` (4), prueba del simulador (5) y `git diff --check` pasan. Verificación Rust y actualización de evidencia de ARD-15 están pendientes. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente.
+ARD-14 añade `search_inventory`, `list_alerts` y `mark_alert_reviewed`, mantiene el acceso vía IPC y presenta búsqueda, cronología y alertas. ARD-15 añade `run_simulation`, cinco recorridos sintéticos y la migración que admite vínculo exacto a eventos o intentos. Sus alertas se insertan en la misma transacción que el registro causante y la bandeja puede abrir un intento aunque no exista ficha de unidad. ARD-15 quedó publicada en `feat/ard-15-simulator`, commit `b8dbf20`; sus 50 pruebas Rust y verificaciones frontend pasaron.
+
+ARD-16 amplía el registrador local para escribir eventos JSON Lines con `operationId`, comando, resultado, duración y código estable. El ID se devuelve en errores IPC y se muestra junto al mensaje seguro. Los detalles dinámicos de persistencia y los payloads del inventario no se registran. Cada archivo queda limitado a 5 MiB y se conservan hasta tres copias. En la revisión actual pasan 54 pruebas Rust, fmt, Clippy, `npm run build` y 14 pruebas frontend (3 de mapa, 4 de catálogo, 5 del simulador y 2 de errores IPC). La publicación de ARD-16 y la actualización de evidencia final quedan pendientes hasta confirmar todas las verificaciones y subir el commit. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.

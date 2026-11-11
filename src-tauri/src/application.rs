@@ -186,6 +186,48 @@ pub enum ApplicationError {
 }
 
 impl ApplicationError {
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Domain(error) => match error {
+                DomainError::EmptyField(_) => "validation.empty_field",
+                DomainError::FieldTooLong(_) => "validation.field_too_long",
+                DomainError::InvalidSku => "validation.invalid_sku",
+                DomainError::InvalidLocationHierarchy => "validation.location_hierarchy",
+                DomainError::InactiveLocationParent => "validation.inactive_location_parent",
+                DomainError::LocationMustBeActivePosition => "validation.invalid_destination",
+                DomainError::PositionOccupied => "inventory.position_occupied",
+                DomainError::InvalidTransition => "inventory.invalid_transition",
+                DomainError::HandlingUnitNeedsLines => "validation.unit_needs_lines",
+                DomainError::QuantityMustBePositive => "validation.invalid_quantity",
+                DomainError::DuplicateHandlingUnitLine => "validation.duplicate_unit_line",
+                DomainError::InvalidTimestamp => "validation.invalid_timestamp",
+                DomainError::InvalidCorrectionReference => {
+                    "validation.invalid_correction_reference"
+                }
+            },
+            Self::Repository(error) => match error {
+                RepositoryError::Conflict => "inventory.conflict",
+                RepositoryError::NotFound => "inventory.not_found",
+                RepositoryError::EventIdConflict => "inventory.event_id_conflict",
+                RepositoryError::InactiveProduct => "inventory.inactive_product",
+                RepositoryError::InvalidTransition => "inventory.invalid_transition",
+                RepositoryError::InvalidLocationHierarchy => "inventory.location_hierarchy",
+                RepositoryError::LocationHierarchyImmutable => {
+                    "inventory.location_hierarchy_immutable"
+                }
+                RepositoryError::InUse => "inventory.in_use",
+                RepositoryError::PositionOccupied => "inventory.position_occupied",
+                RepositoryError::InvalidDestination => "inventory.invalid_destination",
+                RepositoryError::CorrectionReferenceMismatch => {
+                    "inventory.correction_reference_mismatch"
+                }
+                RepositoryError::CorrectionBeforeOriginal => "inventory.correction_before_original",
+                RepositoryError::InvalidAlertTransition => "inventory.invalid_alert_transition",
+                RepositoryError::Storage(_) => "storage",
+            },
+        }
+    }
+
     pub fn user_message(&self) -> &'static str {
         match self {
             Self::Domain(DomainError::InvalidSku) => {
@@ -1565,15 +1607,6 @@ impl GetMovementHistory {
     }
 }
 
-pub fn map_error_for_ui(
-    diagnostic_log: &crate::diagnostic_log::DiagnosticLog,
-    operation: &str,
-    error: &ApplicationError,
-) -> String {
-    let _ = diagnostic_log.record(operation, error);
-    error.user_message().to_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1734,32 +1767,5 @@ mod tests {
             ApplicationError::Repository(RepositoryError::InUse).user_message(),
             "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
         );
-    }
-
-    #[test]
-    fn ui_adapter_logs_internal_details_and_returns_safe_message() {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!("ariadna-ui-error-{unique}"));
-        let log_path = directory.join("logs").join("ariadna.log");
-        let log = crate::diagnostic_log::DiagnosticLog::open(&log_path).unwrap();
-        let error = ApplicationError::Repository(RepositoryError::Storage(
-            "sqlite busy on transaction".to_owned(),
-        ));
-
-        let message = map_error_for_ui(&log, "product.create", &error);
-
-        assert_eq!(
-            message,
-            "No se pudo completar la operación. No se confirmaron cambios."
-        );
-        assert!(!message.contains("sqlite"));
-        let log_contents = std::fs::read_to_string(&log_path).unwrap();
-        assert!(log_contents.contains("product.create"));
-        assert!(log_contents.contains("sqlite busy on transaction"));
-        drop(log);
-        std::fs::remove_dir_all(directory).unwrap();
     }
 }

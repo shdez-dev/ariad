@@ -37,6 +37,16 @@ pub enum PersistenceError {
     Io(#[from] std::io::Error),
 }
 
+impl PersistenceError {
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Sqlx(_) => "database.open_failed",
+            Self::Migration(_) => "database.migration_failed",
+            Self::Io(_) => "filesystem.initialization_failed",
+        }
+    }
+}
+
 impl SqliteDatabase {
     pub async fn open(path: &Path) -> Result<Self, PersistenceError> {
         if let Some(parent) = path.parent() {

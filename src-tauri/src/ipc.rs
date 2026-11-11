@@ -1,3 +1,5 @@
+use std::{future::Future, time::Instant};
+
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
@@ -8,9 +10,9 @@ use crate::{
         GetMovementHistory, GetProduct, InventorySearchKind, InventorySearchResult, ListAlerts,
         ListHandlingUnits, ListLocations, ListProducts, MarkAlertReviewed, MoveUnit, ReceiveLine,
         ReceiveUnit, RecordCorrection, RunSimulation, SearchInventory, SimulationScenario,
-        SimulationStep, StoreUnit, UpdateLocation, UpdateProduct, map_error_for_ui,
+        SimulationStep, StoreUnit, UpdateLocation, UpdateProduct,
     },
-    diagnostic_log::DiagnosticLog,
+    diagnostic_log::{DiagnosticLog, LogEvent, LogLevel},
     domain::{
         AlertRecordTarget, AlertStatus, DomainError, HandlingUnit, Location, LocationKind, Product,
     },
@@ -421,14 +423,11 @@ pub enum IpcErrorCode {
 pub struct IpcError {
     pub code: IpcErrorCode,
     pub message: String,
+    pub operation_id: String,
 }
 
 impl IpcError {
-    fn from_application_error(
-        diagnostic_log: &DiagnosticLog,
-        operation: &str,
-        error: &ApplicationError,
-    ) -> Self {
+    fn from_application_error(operation_id: &str, error: &ApplicationError) -> Self {
         let code = match error {
             ApplicationError::Domain(domain_error) => match domain_error {
                 DomainError::PositionOccupied => IpcErrorCode::PositionOccupied,
@@ -475,18 +474,56 @@ impl IpcError {
                 crate::application::RepositoryError::Storage(_) => IpcErrorCode::Storage,
             },
         };
-        let message = map_error_for_ui(diagnostic_log, operation, error);
-        Self { code, message }
+        Self {
+            code,
+            message: error.user_message().to_owned(),
+            operation_id: operation_id.to_owned(),
+        }
     }
 }
 
-fn expose<T>(
-    state: &AppState,
-    operation: &str,
-    result: Result<T, ApplicationError>,
-) -> Result<T, IpcError> {
-    result
-        .map_err(|error| IpcError::from_application_error(&state.diagnostic_log, operation, &error))
+async fn expose<T, F>(
+    diagnostic_log: &DiagnosticLog,
+    command: &str,
+    operation: F,
+) -> Result<T, IpcError>
+where
+    F: Future<Output = Result<T, ApplicationError>>,
+{
+    let operation_id = DiagnosticLog::next_operation_id();
+    let started_at = Instant::now();
+    match operation.await {
+        Ok(value) => {
+            let _ = diagnostic_log.record_event(LogEvent {
+                level: LogLevel::Info,
+                operation_id: &operation_id,
+                command,
+                result: "success",
+                duration_ms: Some(started_at.elapsed().as_millis()),
+                error_code: None,
+                detail: None,
+            });
+            Ok(value)
+        }
+        Err(error) => {
+            let ipc_error = IpcError::from_application_error(&operation_id, &error);
+            let level = if ipc_error.code == IpcErrorCode::Storage {
+                LogLevel::Error
+            } else {
+                LogLevel::Warn
+            };
+            let _ = diagnostic_log.record_event(LogEvent {
+                level,
+                operation_id: &operation_id,
+                command,
+                result: "error",
+                duration_ms: Some(started_at.elapsed().as_millis()),
+                error_code: Some(error.diagnostic_code()),
+                detail: None,
+            });
+            Err(ipc_error)
+        }
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -498,10 +535,11 @@ pub async fn create_product(
 ) -> Result<ProductResponse, IpcError> {
     let use_case = CreateProduct::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.product.create",
-        use_case.execute(&sku, &description, &unit_of_measure).await,
+        use_case.execute(&sku, &description, &unit_of_measure),
     )
+    .await
     .map(Into::into)
 }
 
@@ -511,8 +549,13 @@ pub async fn get_product(
     sku: String,
 ) -> Result<Option<ProductResponse>, IpcError> {
     let use_case = GetProduct::new(state.inventory_repository.clone());
-    expose(&state, "ipc.product.get", use_case.execute(&sku).await)
-        .map(|product| product.map(Into::into))
+    expose(
+        &state.diagnostic_log,
+        "ipc.product.get",
+        use_case.execute(&sku),
+    )
+    .await
+    .map(|product| product.map(Into::into))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -522,10 +565,11 @@ pub async fn list_products(
 ) -> Result<Vec<ProductResponse>, IpcError> {
     let use_case = ListProducts::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.product.list",
-        use_case.execute(include_inactive).await,
+        use_case.execute(include_inactive),
     )
+    .await
     .map(|products| products.into_iter().map(Into::into).collect())
 }
 
@@ -536,10 +580,11 @@ pub async fn search_inventory(
 ) -> Result<Vec<InventorySearchResponse>, IpcError> {
     let use_case = SearchInventory::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.inventory.search",
-        use_case.execute(&query).await,
+        use_case.execute(&query),
     )
+    .await
     .map(|results| results.into_iter().map(Into::into).collect())
 }
 
@@ -552,10 +597,11 @@ pub async fn update_product(
 ) -> Result<ProductResponse, IpcError> {
     let use_case = UpdateProduct::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.product.update",
-        use_case.execute(&sku, &description, &unit_of_measure).await,
+        use_case.execute(&sku, &description, &unit_of_measure),
     )
+    .await
     .map(Into::into)
 }
 
@@ -566,10 +612,11 @@ pub async fn deactivate_product(
 ) -> Result<ProductResponse, IpcError> {
     let use_case = DeactivateProduct::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.product.deactivate",
-        use_case.execute(&sku).await,
+        use_case.execute(&sku),
     )
+    .await
     .map(Into::into)
 }
 
@@ -584,12 +631,11 @@ pub async fn create_location(
 ) -> Result<LocationResponse, IpcError> {
     let use_case = CreateLocation::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.location.create",
-        use_case
-            .execute(&id, &code, &name, kind.into(), parent_id.as_deref())
-            .await,
+        use_case.execute(&id, &code, &name, kind.into(), parent_id.as_deref()),
     )
+    .await
     .map(Into::into)
 }
 
@@ -599,8 +645,13 @@ pub async fn get_location(
     id: String,
 ) -> Result<Option<LocationResponse>, IpcError> {
     let use_case = GetLocation::new(state.inventory_repository.clone());
-    expose(&state, "ipc.location.get", use_case.execute(&id).await)
-        .map(|location| location.map(Into::into))
+    expose(
+        &state.diagnostic_log,
+        "ipc.location.get",
+        use_case.execute(&id),
+    )
+    .await
+    .map(|location| location.map(Into::into))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -610,10 +661,11 @@ pub async fn list_locations(
 ) -> Result<Vec<LocationResponse>, IpcError> {
     let use_case = ListLocations::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.location.list",
-        use_case.execute(include_inactive).await,
+        use_case.execute(include_inactive),
     )
+    .await
     .map(|locations| locations.into_iter().map(Into::into).collect())
 }
 
@@ -626,10 +678,11 @@ pub async fn update_location(
 ) -> Result<LocationResponse, IpcError> {
     let use_case = UpdateLocation::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.location.update",
-        use_case.execute(&id, &code, &name).await,
+        use_case.execute(&id, &code, &name),
     )
+    .await
     .map(Into::into)
 }
 
@@ -640,10 +693,11 @@ pub async fn deactivate_location(
 ) -> Result<LocationResponse, IpcError> {
     let use_case = DeactivateLocation::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.location.deactivate",
-        use_case.execute(&id).await,
+        use_case.execute(&id),
     )
+    .await
     .map(Into::into)
 }
 
@@ -654,10 +708,11 @@ pub async fn get_handling_unit(
 ) -> Result<Option<HandlingUnitResponse>, IpcError> {
     let use_case = GetHandlingUnit::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.handling_unit.get",
-        use_case.execute(&identifier).await,
+        use_case.execute(&identifier),
     )
+    .await
     .map(|unit| unit.map(Into::into))
 }
 
@@ -668,10 +723,11 @@ pub async fn list_handling_units(
 ) -> Result<Vec<HandlingUnitResponse>, IpcError> {
     let use_case = ListHandlingUnits::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.handling_unit.list",
-        use_case.execute(include_dispatched).await,
+        use_case.execute(include_dispatched),
     )
+    .await
     .map(|units| units.into_iter().map(Into::into).collect())
 }
 
@@ -686,19 +742,18 @@ pub async fn receive_unit(
 ) -> Result<MovementWriteResponse, IpcError> {
     let use_case = ReceiveUnit::new(state.inventory_repository.clone());
     let outcome = expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.receive",
-        use_case
-            .execute(
-                &id,
-                &label,
-                lines.into_iter().map(Into::into).collect(),
-                &event_id,
-                occurred_at_ms,
-                DESKTOP_SOURCE,
-            )
-            .await,
-    )?;
+        use_case.execute(
+            &id,
+            &label,
+            lines.into_iter().map(Into::into).collect(),
+            &event_id,
+            occurred_at_ms,
+            DESKTOP_SOURCE,
+        ),
+    )
+    .await?;
     Ok(MovementWriteResponse::new(event_id, outcome))
 }
 
@@ -713,19 +768,18 @@ pub async fn move_unit(
 ) -> Result<MovementWriteResponse, IpcError> {
     let use_case = MoveUnit::new(state.inventory_repository.clone());
     let outcome = expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.move",
-        use_case
-            .execute(
-                &event_id,
-                &handling_unit_id,
-                &origin_location_id,
-                &destination_location_id,
-                occurred_at_ms,
-                DESKTOP_SOURCE,
-            )
-            .await,
-    )?;
+        use_case.execute(
+            &event_id,
+            &handling_unit_id,
+            &origin_location_id,
+            &destination_location_id,
+            occurred_at_ms,
+            DESKTOP_SOURCE,
+        ),
+    )
+    .await?;
     Ok(MovementWriteResponse::new(event_id, outcome))
 }
 
@@ -739,18 +793,17 @@ pub async fn store_unit(
 ) -> Result<MovementWriteResponse, IpcError> {
     let use_case = StoreUnit::new(state.inventory_repository.clone());
     let outcome = expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.store",
-        use_case
-            .execute(
-                &event_id,
-                &handling_unit_id,
-                &destination_location_id,
-                occurred_at_ms,
-                DESKTOP_SOURCE,
-            )
-            .await,
-    )?;
+        use_case.execute(
+            &event_id,
+            &handling_unit_id,
+            &destination_location_id,
+            occurred_at_ms,
+            DESKTOP_SOURCE,
+        ),
+    )
+    .await?;
     Ok(MovementWriteResponse::new(event_id, outcome))
 }
 
@@ -764,18 +817,17 @@ pub async fn dispatch_unit(
 ) -> Result<MovementWriteResponse, IpcError> {
     let use_case = DispatchUnit::new(state.inventory_repository.clone());
     let outcome = expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.dispatch",
-        use_case
-            .execute(
-                &event_id,
-                &handling_unit_id,
-                &origin_location_id,
-                occurred_at_ms,
-                DESKTOP_SOURCE,
-            )
-            .await,
-    )?;
+        use_case.execute(
+            &event_id,
+            &handling_unit_id,
+            &origin_location_id,
+            occurred_at_ms,
+            DESKTOP_SOURCE,
+        ),
+    )
+    .await?;
     Ok(MovementWriteResponse::new(event_id, outcome))
 }
 
@@ -790,19 +842,18 @@ pub async fn record_movement_correction(
 ) -> Result<CorrectionWriteResponse, IpcError> {
     let use_case = RecordCorrection::new(state.inventory_repository.clone());
     let outcome = expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.correct",
-        use_case
-            .execute(
-                &correction_id,
-                &handling_unit_id,
-                &corrects_event_id,
-                &reason,
-                occurred_at_ms,
-                DESKTOP_SOURCE,
-            )
-            .await,
-    )?;
+        use_case.execute(
+            &correction_id,
+            &handling_unit_id,
+            &corrects_event_id,
+            &reason,
+            occurred_at_ms,
+            DESKTOP_SOURCE,
+        ),
+    )
+    .await?;
     Ok(CorrectionWriteResponse {
         correction_id,
         outcome: match outcome {
@@ -819,17 +870,19 @@ pub async fn get_movement_history(
 ) -> Result<Vec<MovementHistoryResponse>, IpcError> {
     let use_case = GetMovementHistory::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.movement.history",
-        use_case.execute(&handling_unit_id).await,
+        use_case.execute(&handling_unit_id),
     )
+    .await
     .map(|entries| entries.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command]
 pub async fn list_alerts(state: State<'_, AppState>) -> Result<Vec<AlertResponse>, IpcError> {
     let use_case = ListAlerts::new(state.inventory_repository.clone());
-    expose(&state, "ipc.alert.list", use_case.execute().await)
+    expose(&state.diagnostic_log, "ipc.alert.list", use_case.execute())
+        .await
         .map(|alerts| alerts.into_iter().map(Into::into).collect())
 }
 
@@ -840,10 +893,11 @@ pub async fn mark_alert_reviewed(
 ) -> Result<AlertResponse, IpcError> {
     let use_case = MarkAlertReviewed::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.alert.review",
-        use_case.execute(&alert_id).await,
+        use_case.execute(&alert_id),
     )
+    .await
     .map(Into::into)
 }
 
@@ -855,10 +909,11 @@ pub async fn run_simulation(
 ) -> Result<SimulationResponse, IpcError> {
     let use_case = RunSimulation::new(state.inventory_repository.clone());
     expose(
-        &state,
+        &state.diagnostic_log,
         "ipc.simulation.run",
-        use_case.execute(&seed, scenario.into()).await,
+        use_case.execute(&seed, scenario.into()),
     )
+    .await
     .map(Into::into)
 }
 
@@ -1039,8 +1094,8 @@ mod tests {
         assert_eq!(LocationKind::from(kind).as_str(), "position");
     }
 
-    #[test]
-    fn ipc_errors_keep_stable_code_and_safe_message() {
+    #[tokio::test]
+    async fn ipc_errors_keep_safe_message_and_correlate_with_private_log() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1051,7 +1106,9 @@ mod tests {
             "sqlite secret detail".to_owned(),
         ));
 
-        let result = IpcError::from_application_error(&log, "ipc.product.get", &error);
+        let result = expose(&log, "ipc.product.get", async { Err::<(), _>(error) })
+            .await
+            .unwrap_err();
 
         assert_eq!(result.code, IpcErrorCode::Storage);
         assert_eq!(
@@ -1062,19 +1119,55 @@ mod tests {
         let serialized = serde_json::to_value(&result).unwrap();
         assert_eq!(serialized["code"], "storage");
         assert_eq!(serialized["message"], result.message);
+        assert_eq!(serialized["operationId"], result.operation_id);
         let contents = std::fs::read_to_string(directory.join("ariadna.log")).unwrap();
-        assert!(contents.contains("sqlite secret detail"));
+        let entry: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
+        assert_eq!(entry["operationId"], result.operation_id);
+        assert_eq!(entry["command"], "ipc.product.get");
+        assert_eq!(entry["result"], "error");
+        assert_eq!(entry["errorCode"], "storage");
+        assert!(entry["durationMs"].is_number());
+        assert!(!contents.contains("sqlite secret detail"));
 
         let transition_error = ApplicationError::Repository(
             crate::application::RepositoryError::InvalidAlertTransition,
         );
-        let transition =
-            IpcError::from_application_error(&log, "ipc.alert.review", &transition_error);
+        let transition = IpcError::from_application_error("op-transition", &transition_error);
         assert_eq!(transition.code, IpcErrorCode::InvalidAlertTransition);
         assert_eq!(
             serde_json::to_value(transition).unwrap()["code"],
             "invalid_alert_transition"
         );
+        drop(log);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn successful_ipc_operations_record_outcome_and_duration() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-ipc-success-{unique}"));
+        let log = DiagnosticLog::open(directory.join("ariadna.log")).unwrap();
+
+        assert_eq!(
+            expose(&log, "ipc.inventory.search", async {
+                Ok::<_, ApplicationError>(7)
+            })
+            .await
+            .unwrap(),
+            7
+        );
+
+        let contents = std::fs::read_to_string(directory.join("ariadna.log")).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(contents.trim()).unwrap();
+        assert_eq!(entry["level"], "INFO");
+        assert_eq!(entry["command"], "ipc.inventory.search");
+        assert_eq!(entry["result"], "success");
+        assert!(entry["durationMs"].is_number());
+        assert!(entry["operationId"].as_str().unwrap().starts_with("op-"));
+
         drop(log);
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -56,9 +56,9 @@ Las alertas pueden apuntar a un movimiento aceptado o a un intento duplicado/rec
 
 ## Errores
 
-Cuando una operación falla, la promesa de `invoke` se rechaza con `{ code, message }`. `AriadnaIpcError` adapta ese rechazo para que la interfaz pueda mostrar el mensaje seguro y tomar decisiones por código. Los códigos estables incluyen `validation`, `conflict`, `not_found`, `event_id_conflict`, `inactive_product`, `invalid_transition`, `invalid_location_hierarchy`, `location_hierarchy_immutable`, `in_use`, `position_occupied`, `invalid_destination`, `correction_reference_mismatch`, `correction_before_original` y `storage`.
+Cuando una operación falla, la promesa de `invoke` se rechaza con `{ code, message, operationId }`. `AriadnaIpcError` adapta ese rechazo para que la interfaz muestre el mensaje seguro y el ID de operación, y pueda tomar decisiones por código. Los códigos estables incluyen `validation`, `conflict`, `not_found`, `event_id_conflict`, `inactive_product`, `invalid_transition`, `invalid_location_hierarchy`, `location_hierarchy_immutable`, `in_use`, `position_occupied`, `invalid_destination`, `correction_reference_mismatch`, `correction_before_original` y `storage`.
 
-Los códigos estables incluyen `invalid_alert_transition` además de los errores de validación, conflicto, referencias faltantes, transiciones, jerarquía, ocupación, corrección y almacenamiento. Los detalles internos, como errores SQLite, se escriben en `logs/ariadna.log`; no se incluyen en los mensajes IPC. Una operación rechazada no confirma cambios parciales.
+Los códigos estables incluyen `invalid_alert_transition` además de los errores de validación, conflicto, referencias faltantes, transiciones, jerarquía, ocupación, corrección y almacenamiento. Cada comando IPC registra un JSON por línea con `timestampMs`, `level`, `operationId`, `command`, `result`, `durationMs` y, si corresponde, `errorCode`. No se escriben los payloads, secretos, rutas ni el texto dinámico de SQLite. El archivo está en `app_data_dir/logs/ariadna.log`, con máximo de 5 MiB y tres copias rotativas. Los mensajes de error que corresponden a validaciones o reglas del inventario siguen siendo comprensibles; los errores de almacenamiento no exponen detalles internos. Una operación rechazada no confirma cambios parciales.
 
 Después de crear, actualizar o desactivar una ubicación, y después de una recepción, asignación inicial, traslado o despacho confirmados, el wrapper emite el evento de ventana `ariadna:inventory-changed`. Las vistas que dependen de la jerarquía o la ocupación, como el mapa lógico de ARD-11, lo escuchan para volver a consultar ubicaciones y unidades persistidas. El evento no se emite si el comando falla. Los cambios de productos no modifican la ocupación ni requieren refrescar el mapa.
 
@@ -71,5 +71,6 @@ Marcar una alerta como revisada no cambia el inventario y no emite `ariadna:inve
 - Pruebas Rust para los cinco escenarios, semilla reproducible, origen sintético y vínculo entre anomalía, intento y alerta.
 - La cronología existente cubre eventos aceptados, intentos duplicados/rechazados y correcciones en orden estable.
 - Pruebas de serialización de DTO, enums, nombres camelCase y forma estable de errores.
+- Pruebas del registro local cubren IDs correlacionados, resultado y duración, ausencia de detalles sensibles, limpieza/truncamiento y rotación.
 - `npm run build` comprueba que los consumidores TypeScript usan el contrato sin tipos contradictorios.
 - `cargo test` y `cargo clippy --all-targets -- -D warnings` comprueban el puente y el núcleo Rust.

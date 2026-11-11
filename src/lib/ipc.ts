@@ -139,15 +139,22 @@ export type IpcErrorCode =
 type IpcErrorPayload = {
   code: IpcErrorCode;
   message: string;
+  operationId?: string;
 };
 
 export class AriadnaIpcError extends Error {
   readonly code: IpcErrorCode;
+  readonly operationId?: string;
 
   constructor(payload: IpcErrorPayload) {
-    super(payload.message);
+    super(
+      payload.operationId
+        ? `${payload.message} (ID de operación: ${payload.operationId})`
+        : payload.message,
+    );
     this.name = "AriadnaIpcError";
     this.code = payload.code;
+    this.operationId = payload.operationId;
   }
 }
 
