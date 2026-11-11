@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-handling-units"
+description = "Enables the list_handling_units command without any pre-configured scope."
+commands.allow = ["list_handling_units"]
+
+[[permission]]
+identifier = "deny-list-handling-units"
+description = "Denies the list_handling_units command without any pre-configured scope."
+commands.deny = ["list_handling_units"]

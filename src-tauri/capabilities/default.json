@@ -1,7 +1,30 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Allows the main window to invoke only the inventory commands used by Ariadna",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "allow-create-product",
+    "allow-get-product",
+    "allow-list-products",
+    "allow-search-inventory",
+    "allow-update-product",
+    "allow-deactivate-product",
+    "allow-create-location",
+    "allow-get-location",
+    "allow-list-locations",
+    "allow-update-location",
+    "allow-deactivate-location",
+    "allow-get-handling-unit",
+    "allow-list-handling-units",
+    "allow-receive-unit",
+    "allow-store-unit",
+    "allow-move-unit",
+    "allow-dispatch-unit",
+    "allow-record-movement-correction",
+    "allow-get-movement-history",
+    "allow-list-alerts",
+    "allow-mark-alert-reviewed",
+    "allow-run-simulation"
+  ]
 }

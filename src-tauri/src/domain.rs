@@ -2,6 +2,9 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
+pub const MAX_HANDLING_UNIT_LINES: usize = 100;
+pub const MAX_LOT_CODE_LENGTH: usize = 120;
+
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum DomainError {
     #[error("El campo {0} es obligatorio.")]
@@ -22,6 +25,8 @@ pub enum DomainError {
     InvalidTransition,
     #[error("La unidad debe contener al menos una línea de producto.")]
     HandlingUnitNeedsLines,
+    #[error("La unidad supera el máximo de líneas de producto permitido.")]
+    TooManyHandlingUnitLines,
     #[error("La cantidad de una línea debe ser mayor que cero.")]
     QuantityMustBePositive,
     #[error("Una unidad no puede repetir la misma combinación de SKU y lote.")]
@@ -217,6 +222,11 @@ impl HandlingUnitLine {
         let lot_code = lot_code
             .map(|value| value.as_ref().trim().to_owned())
             .filter(|value| !value.is_empty());
+        if lot_code.as_ref().is_some_and(|value| {
+            value.len() > MAX_LOT_CODE_LENGTH * 4 || value.chars().count() > MAX_LOT_CODE_LENGTH
+        }) {
+            return Err(DomainError::FieldTooLong("código de lote"));
+        }
 
         Ok(Self {
             sku: Sku::new(sku)?,
@@ -258,6 +268,9 @@ impl HandlingUnit {
         label: impl AsRef<str>,
         lines: Vec<HandlingUnitLine>,
     ) -> Result<Self, DomainError> {
+        if lines.len() > MAX_HANDLING_UNIT_LINES {
+            return Err(DomainError::TooManyHandlingUnitLines);
+        }
         if lines.is_empty() {
             return Err(DomainError::HandlingUnitNeedsLines);
         }
@@ -906,6 +919,29 @@ mod tests {
         assert_eq!(
             HandlingUnit::new("unit-duplicate-lot", "PALLET-DUP", duplicate_lines),
             Err(DomainError::DuplicateHandlingUnitLine)
+        );
+
+        assert!(HandlingUnitLine::new("SKU-1", 1, Some("L".repeat(MAX_LOT_CODE_LENGTH))).is_ok());
+        assert_eq!(
+            HandlingUnitLine::new("SKU-1", 1, Some("L".repeat(MAX_LOT_CODE_LENGTH + 1))),
+            Err(DomainError::FieldTooLong("código de lote"))
+        );
+    }
+
+    #[test]
+    fn enforces_handling_unit_line_count_limit() {
+        let boundary_lines = (1..=MAX_HANDLING_UNIT_LINES)
+            .map(|index| line(&format!("SKU-{index}"), 1))
+            .collect();
+        let unit = HandlingUnit::new("unit-boundary", "PALLET-BOUNDARY", boundary_lines).unwrap();
+        assert_eq!(unit.lines.len(), MAX_HANDLING_UNIT_LINES);
+
+        let too_many_lines = (1..=MAX_HANDLING_UNIT_LINES + 1)
+            .map(|index| line(&format!("SKU-{index}"), 1))
+            .collect();
+        assert_eq!(
+            HandlingUnit::new("unit-too-many", "PALLET-TOO-MANY", too_many_lines),
+            Err(DomainError::TooManyHandlingUnitLines)
         );
     }
 

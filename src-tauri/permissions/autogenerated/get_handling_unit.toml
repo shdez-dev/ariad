@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-handling-unit"
+description = "Enables the get_handling_unit command without any pre-configured scope."
+commands.allow = ["get_handling_unit"]
+
+[[permission]]
+identifier = "deny-get-handling-unit"
+description = "Denies the get_handling_unit command without any pre-configured scope."
+commands.deny = ["get_handling_unit"]

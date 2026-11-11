@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-deactivate-product"
+description = "Enables the deactivate_product command without any pre-configured scope."
+commands.allow = ["deactivate_product"]
+
+[[permission]]
+identifier = "deny-deactivate-product"
+description = "Denies the deactivate_product command without any pre-configured scope."
+commands.deny = ["deactivate_product"]

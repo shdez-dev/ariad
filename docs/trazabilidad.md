@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-18 tienen incrementos de implementación publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio y ARD-18 verifica atomicidad SQLite y persistencia al reabrir el mismo archivo.
+Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-18 tienen incrementos de implementación publicados; ARD-19 revisa capacidades y entradas de Tauri; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite y ARD-19 aporta controles de seguridad y validación.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -38,7 +38,7 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 | RQ-01 Rendimiento local | Consultas SQLite acotadas e índices derivados de búsquedas reales | ARD-21: medir p50/p95 en el conjunto RQ-02 y registrar equipo, versión, volumen y método; meta p95 <= 2 s |
 | RQ-02 Capacidad de demostración | Datos sintéticos reproducibles: 500 unidades, 250 posiciones y 10.000 eventos | ARD-21: generar el conjunto, medir operaciones clave y revisar consistencia e historial; no es una garantía de producción |
 | RQ-03 Persistencia e integridad | Archivo SQLite, migraciones y transacciones para estado más historial | ARD-18: cerrar/reabrir la base y comparar estado; comprobar que un rechazo/fallo no deja cambios parciales |
-| RQ-04 Privacidad y seguridad básica | Datos sintéticos, validación Rust, SQL parametrizado y capacidades Tauri mínimas | ARD-19: revisión de configuración y código; confirmar que no se guardan secretos ni se inicia una API local |
+| RQ-04 Privacidad y seguridad básica | Datos sintéticos, validación Rust, SQL parametrizado y capacidades Tauri mínimas | ARD-19: capacidad limitada a 22 comandos, CSP local con IPC, entradas acotadas, consultas enlazadas y ausencia de API local o credenciales; evidencia en `docs/revision-seguridad-ARD-19.md` |
 | RQ-05 Accesibilidad básica | Etiquetas explícitas, estado no dependiente solo del color, foco visible y teclado | Revisión manual de formularios, mapa, búsqueda, alertas y flujos antes de la versión candidata |
 | RQ-06 Compatibilidad | Primera aceptación en Windows x64 documentado; otros sistemas no garantizados | ARD-02/24: registrar Windows, Rust/MSVC, Tauri, Node si aplica y pasos reproducibles |
 | RQ-07 Mantenibilidad | Formato, lint, pruebas y compilación Rust documentados | ARD-17, ARD-18 y ARD-20: comandos locales y salida de CI de la revisión candidata |
@@ -69,3 +69,9 @@ ARD-18 añade pruebas de integración para rollback después de una escritura pa
 La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. El siguiente trabajo de implementación según el backlog es ARD-19, revisión de seguridad y capacidades de Tauri.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
+
+## Evidencia de ARD-19
+
+ARD-19 limita la capacidad de la ventana principal a los 22 comandos IPC usados por el frontend y aplica una CSP para recursos locales e IPC de Tauri. El backend limita la búsqueda y el lote a 120 caracteres y cada recepción a 100 líneas; SQLx usa parámetros enlazados. La inspección no encontró API HTTP de negocio, permisos generales de filesystem o shell, credenciales ni dependencias directas de servidor o cliente HTTP. La evidencia detallada se mantiene en `docs/revision-seguridad-ARD-19.md`.
+
+Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnings`, `npm run build`, las 14 pruebas frontend y `npm run tauri -- build --no-bundle`. La comprobación del manifiesto confirma que los 22 comandos registrados están permitidos y que no hay permisos adicionales. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes.

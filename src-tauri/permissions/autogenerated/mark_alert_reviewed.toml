@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mark-alert-reviewed"
+description = "Enables the mark_alert_reviewed command without any pre-configured scope."
+commands.allow = ["mark_alert_reviewed"]
+
+[[permission]]
+identifier = "deny-mark-alert-reviewed"
+description = "Denies the mark_alert_reviewed command without any pre-configured scope."
+commands.deny = ["mark_alert_reviewed"]

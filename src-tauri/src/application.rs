@@ -5,8 +5,10 @@ use thiserror::Error;
 
 use crate::domain::{
     Alert, AlertIntent, DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind,
-    MovementCorrection, MovementEvent, MovementKind, Product, Sku,
+    MAX_HANDLING_UNIT_LINES, MovementCorrection, MovementEvent, MovementKind, Product, Sku,
 };
+
+pub const MAX_INVENTORY_SEARCH_LENGTH: usize = 120;
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum RepositoryError {
@@ -198,6 +200,7 @@ impl ApplicationError {
                 DomainError::PositionOccupied => "inventory.position_occupied",
                 DomainError::InvalidTransition => "inventory.invalid_transition",
                 DomainError::HandlingUnitNeedsLines => "validation.unit_needs_lines",
+                DomainError::TooManyHandlingUnitLines => "validation.too_many_unit_lines",
                 DomainError::QuantityMustBePositive => "validation.invalid_quantity",
                 DomainError::DuplicateHandlingUnitLine => "validation.duplicate_unit_line",
                 DomainError::InvalidTimestamp => "validation.invalid_timestamp",
@@ -247,6 +250,15 @@ impl ApplicationError {
             },
             Self::Domain(DomainError::FieldTooLong("etiqueta de unidad")) => {
                 "La etiqueta de la unidad no puede superar 120 caracteres."
+            }
+            Self::Domain(DomainError::FieldTooLong("código de lote")) => {
+                "El código de lote no puede superar 120 caracteres."
+            }
+            Self::Domain(DomainError::FieldTooLong("consulta de inventario")) => {
+                "La búsqueda no puede superar 120 caracteres."
+            }
+            Self::Domain(DomainError::TooManyHandlingUnitLines) => {
+                "Una unidad no puede superar 100 líneas de producto."
             }
             Self::Domain(DomainError::FieldTooLong(_)) => {
                 "Uno de los campos ingresados supera la longitud permitida."
@@ -590,6 +602,9 @@ impl ReceiveUnit {
         occurred_at_ms: i64,
         source: &str,
     ) -> Result<EventOutcome, ApplicationError> {
+        if lines.len() > MAX_HANDLING_UNIT_LINES {
+            return Err(DomainError::TooManyHandlingUnitLines.into());
+        }
         let lines = lines
             .into_iter()
             .map(|line| HandlingUnitLine::new(line.sku, line.quantity, line.lot_code.as_deref()))
@@ -797,6 +812,11 @@ impl SearchInventory {
         &self,
         query: &str,
     ) -> Result<Vec<InventorySearchResult>, ApplicationError> {
+        if query.len() > MAX_INVENTORY_SEARCH_LENGTH * 4
+            || query.chars().count() > MAX_INVENTORY_SEARCH_LENGTH
+        {
+            return Err(DomainError::FieldTooLong("consulta de inventario").into());
+        }
         let query = query.trim().to_lowercase();
         if query.is_empty() {
             return Ok(Vec::new());
@@ -1743,6 +1763,47 @@ mod tests {
             Err(ApplicationError::Domain(DomainError::InvalidSku))
         ));
         assert_eq!(repository.saved_skus.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn inventory_search_rejects_oversized_query_before_repository_access() {
+        let repository = Arc::new(FakeRepository::default());
+        let use_case = SearchInventory::new(repository);
+
+        let error = use_case
+            .execute(&"ñ".repeat(MAX_INVENTORY_SEARCH_LENGTH + 1))
+            .await;
+
+        assert!(matches!(
+            error,
+            Err(ApplicationError::Domain(DomainError::FieldTooLong(
+                "consulta de inventario"
+            )))
+        ));
+    }
+
+    #[tokio::test]
+    async fn receive_rejects_too_many_lines_before_domain_conversion_or_storage() {
+        let repository = Arc::new(FakeRepository::default());
+        let use_case = ReceiveUnit::new(repository);
+        let lines = (0..=MAX_HANDLING_UNIT_LINES)
+            .map(|_| ReceiveLine {
+                sku: "SKU-1".to_owned(),
+                quantity: 1,
+                lot_code: None,
+            })
+            .collect();
+
+        let error = use_case
+            .execute("unit-1", "PALLET-1", lines, "event-1", 1, "test")
+            .await;
+
+        assert!(matches!(
+            error,
+            Err(ApplicationError::Domain(
+                DomainError::TooManyHandlingUnitLines
+            ))
+        ));
     }
 
     #[test]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-move-unit"
+description = "Enables the move_unit command without any pre-configured scope."
+commands.allow = ["move_unit"]
+
+[[permission]]
+identifier = "deny-move-unit"
+description = "Denies the move_unit command without any pre-configured scope."
+commands.deny = ["move_unit"]

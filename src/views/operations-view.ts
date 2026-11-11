@@ -16,6 +16,9 @@ import {
   unitsAwaitingStorage,
 } from "../lib/catalog-model";
 
+const MAX_RECEIVE_LINES = 100;
+const MAX_LOT_CODE_LENGTH = 120;
+
 type OperationMode = "receive" | "store" | "move" | "dispatch";
 type RefreshResult =
   | { kind: "loaded" }
@@ -195,6 +198,7 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
   }
 
   function appendReceiveLine(): void {
+    if (receiveLines.children.length >= MAX_RECEIVE_LINES) return;
     const row = document.createElement("div");
     row.className = "receive-line-row";
 
@@ -224,6 +228,7 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
     lotLabel.textContent = "Lote, opcional";
     const lotInput = document.createElement("input");
     lotInput.type = "text";
+    lotInput.maxLength = MAX_LOT_CODE_LENGTH;
     lotInput.autocomplete = "off";
     lotInput.dataset.receiveLot = "true";
     lotLabel.append(lotInput);
@@ -338,8 +343,11 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
     fieldsets.move.disabled = busy || uncertainRetry !== null || loadFailed || stored.length === 0 || moveTargets.length === 0;
     fieldsets.dispatch.disabled = busy || uncertainRetry !== null || loadFailed || stored.length === 0;
     refreshButton.disabled = busy;
-    addLineButton.disabled = busy || products.length === 0;
     const lineRows = [...receiveLines.querySelectorAll<HTMLElement>(".receive-line-row")];
+    addLineButton.disabled = busy || products.length === 0 || lineRows.length >= MAX_RECEIVE_LINES;
+    addLineButton.title = lineRows.length >= MAX_RECEIVE_LINES
+      ? "Una unidad puede contener hasta 100 líneas de producto."
+      : "Agregar otra línea de producto";
     for (const row of lineRows) {
       const remove = row.querySelector<HTMLButtonElement>(".receive-line-remove");
       if (remove) remove.disabled = busy || lineRows.length <= 1;

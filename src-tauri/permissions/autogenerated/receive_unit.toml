@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-receive-unit"
+description = "Enables the receive_unit command without any pre-configured scope."
+commands.allow = ["receive_unit"]
+
+[[permission]]
+identifier = "deny-receive-unit"
+description = "Denies the receive_unit command without any pre-configured scope."
+commands.deny = ["receive_unit"]

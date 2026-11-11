@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-dispatch-unit"
+description = "Enables the dispatch_unit command without any pre-configured scope."
+commands.allow = ["dispatch_unit"]
+
+[[permission]]
+identifier = "deny-dispatch-unit"
+description = "Denies the dispatch_unit command without any pre-configured scope."
+commands.deny = ["dispatch_unit"]

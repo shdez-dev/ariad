@@ -14,7 +14,8 @@ use crate::{
     },
     diagnostic_log::{DiagnosticLog, LogEvent, LogLevel},
     domain::{
-        AlertRecordTarget, AlertStatus, DomainError, HandlingUnit, Location, LocationKind, Product,
+        AlertRecordTarget, AlertStatus, DomainError, HandlingUnit, Location, LocationKind,
+        MAX_HANDLING_UNIT_LINES, Product,
     },
     state::AppState,
 };
@@ -741,18 +742,22 @@ pub async fn receive_unit(
     occurred_at_ms: i64,
 ) -> Result<MovementWriteResponse, IpcError> {
     let use_case = ReceiveUnit::new(state.inventory_repository.clone());
-    let outcome = expose(
-        &state.diagnostic_log,
-        "ipc.movement.receive",
-        use_case.execute(
-            &id,
-            &label,
-            lines.into_iter().map(Into::into).collect(),
-            &event_id,
-            occurred_at_ms,
-            DESKTOP_SOURCE,
-        ),
-    )
+    let event_id_for_operation = event_id.clone();
+    let outcome = expose(&state.diagnostic_log, "ipc.movement.receive", async move {
+        if lines.len() > MAX_HANDLING_UNIT_LINES {
+            return Err(DomainError::TooManyHandlingUnitLines.into());
+        }
+        use_case
+            .execute(
+                &id,
+                &label,
+                lines.into_iter().map(Into::into).collect(),
+                &event_id_for_operation,
+                occurred_at_ms,
+                DESKTOP_SOURCE,
+            )
+            .await
+    })
     .await?;
     Ok(MovementWriteResponse::new(event_id, outcome))
 }

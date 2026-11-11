@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-deactivate-location"
+description = "Enables the deactivate_location command without any pre-configured scope."
+commands.allow = ["deactivate_location"]
+
+[[permission]]
+identifier = "deny-deactivate-location"
+description = "Denies the deactivate_location command without any pre-configured scope."
+commands.deny = ["deactivate_location"]
