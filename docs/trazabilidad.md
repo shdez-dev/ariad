@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-19 tienen incrementos de implementación publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite y ARD-19 aporta controles de seguridad y validación.
+Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-20 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite, ARD-19 aporta controles de seguridad y validación, y ARD-20 valida el proyecto en CI sobre Windows.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -41,7 +41,7 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 | RQ-04 Privacidad y seguridad básica | Datos sintéticos, validación Rust, SQL parametrizado y capacidades Tauri mínimas | ARD-19: capacidad limitada a 22 comandos, CSP local con IPC, entradas acotadas, consultas enlazadas y ausencia de API local o credenciales; evidencia en `docs/revision-seguridad-ARD-19.md` |
 | RQ-05 Accesibilidad básica | Etiquetas explícitas, estado no dependiente solo del color, foco visible y teclado | Revisión manual de formularios, mapa, búsqueda, alertas y flujos antes de la versión candidata |
 | RQ-06 Compatibilidad | Primera aceptación en Windows x64 documentado; otros sistemas no garantizados | ARD-02/24: registrar Windows, Rust/MSVC, Tauri, Node si aplica y pasos reproducibles |
-| RQ-07 Mantenibilidad | Formato, lint, pruebas y compilación Rust documentados | ARD-17, ARD-18 y ARD-20: comandos locales y salida de CI de la revisión candidata |
+| RQ-07 Mantenibilidad | Formato, lint, pruebas Rust y frontend, y compilación Tauri documentados y automatizados | ARD-17, ARD-18 y ARD-20: comandos locales y run de CI Windows; los fallos dejan el check `CI / Windows` en rojo. La protección de rama para bloquear merges requiere activar ese check en GitHub |
 | RQ-08 Disponibilidad/recuperación productiva | No aplica al prototipo local de un usuario; sin SLA, alta disponibilidad ni DR | Registrar esta exclusión; no simular una aceptación productiva |
 
 ## Correspondencia con el backlog
@@ -66,7 +66,7 @@ ARD-17 añade pruebas unitarias para límites de productos, jerarquías y datos 
 
 ARD-18 añade pruebas de integración para rollback después de una escritura parcial de recepción y cuando falla la inserción de una alerta vinculada a un traslado. También cierra y reabre la misma base temporal y vuelve a consultar producto, unidad, líneas, ubicación, historial y alerta. Las pruebas existentes cubren migraciones en base limpia y actualización desde la versión anterior, restricciones relevantes e idempotencia de recepción y movimiento. En conjunto pasan 68 pruebas Rust; también pasan `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings`. Publicada en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`.
 
-La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. ARD-19 completó la revisión de seguridad y capacidades de Tauri; el siguiente trabajo según el backlog es ARD-20, configurar CI.
+La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. ARD-19 completó la revisión de seguridad y capacidades de Tauri. ARD-20 configuró y verificó CI en Windows; el siguiente incremento técnico del backlog es ARD-21, medir capacidad y latencia objetivo.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
 
@@ -74,4 +74,10 @@ La ventana inicial fue observada como evidencia de ARD-02. El perfil local exist
 
 ARD-19 limita la capacidad de la ventana principal a los 22 comandos IPC usados por el frontend y aplica una CSP para recursos locales e IPC de Tauri. El backend limita la búsqueda y el lote a 120 caracteres y cada recepción a 100 líneas; SQLx usa parámetros enlazados. La inspección no encontró API HTTP de negocio, permisos generales de filesystem o shell, credenciales ni dependencias directas de servidor o cliente HTTP. Publicada en `feat/ard-19-tauri-security`, commit `8b5ea7c`. La evidencia detallada se mantiene en `docs/revision-seguridad-ARD-19.md`.
 
-Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnings`, `npm run build`, las 14 pruebas frontend y `npm run tauri -- build --no-bundle`. La comprobación del manifiesto confirma que los 22 comandos registrados están permitidos y que no hay permisos adicionales. El siguiente incremento es ARD-20, configurar CI. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes.
+Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnings`, `npm run build`, las 14 pruebas frontend y `npm run tauri -- build --no-bundle`. La comprobación del manifiesto confirma que los 22 comandos registrados están permitidos y que no hay permisos adicionales.
+
+## Evidencia de ARD-20
+
+ARD-20 configura el workflow `.github/workflows/ci.yml` para validar cada push y pull request en Windows. El run [42955336210](https://github.com/shdez-dev/ariad/actions/runs/42955336210) terminó con resultado `success` para `feat/ard-20-ci`, commit `202772a7a3026588494700b6a6908bfd1450160f`. Pasaron instalación con `npm ci`, compilación y las cuatro suites frontend, `cargo fmt --check`, Clippy, las pruebas Rust y `npm run tauri -- build --no-bundle`. El workflow usa permiso `contents: read` y no requiere secretos. La guía `docs/continuous-integration.md` registra los comandos equivalentes. Para que un check rojo impida integrar cambios, la protección de rama debe configurarse en GitHub con el check `CI / Windows`; esta regla remota no se modificó.
+
+ARD-20 está publicada en `feat/ard-20-ci`, commit `202772a`. El siguiente incremento técnico es ARD-21, medir búsqueda, historial y operaciones de movimiento con 500 unidades, 250 ubicaciones y 10.000 eventos sintéticos. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en una bodega siguen pendientes.
