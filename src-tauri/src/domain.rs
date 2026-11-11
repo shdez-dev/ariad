@@ -737,4 +737,458 @@ mod tests {
             Err(DomainError::FieldTooLong("motivo de corrección"))
         );
     }
+
+    #[test]
+    fn validates_product_boundaries_and_deactivation() {
+        let mut product = Product::new(" sku-01 ", "  Caja de cartón  ", "  unidad ").unwrap();
+        assert_eq!(product.sku.as_str(), "SKU-01");
+        assert_eq!(product.description, "Caja de cartón");
+        assert_eq!(product.unit_of_measure, "unidad");
+        assert!(product.active);
+
+        assert_eq!(
+            Product::new("SKU-1", "  ", "unidad"),
+            Err(DomainError::EmptyField("descripción"))
+        );
+        assert_eq!(
+            Product::new("SKU-1", "Caja", "  "),
+            Err(DomainError::EmptyField("unidad de medida"))
+        );
+        assert_eq!(
+            Product::new("SKU-1", "x".repeat(251), "unidad"),
+            Err(DomainError::FieldTooLong("descripción"))
+        );
+        assert_eq!(
+            Product::new("SKU-1", "Caja", "u".repeat(25)),
+            Err(DomainError::FieldTooLong("unidad de medida"))
+        );
+
+        let boundary = Product::new("SKU-2", "x".repeat(250), "u".repeat(24)).unwrap();
+        assert_eq!(boundary.description.len(), 250);
+        assert_eq!(boundary.unit_of_measure.len(), 24);
+
+        product.deactivate();
+        assert!(!product.active);
+    }
+
+    #[test]
+    fn accepts_each_location_parent_level_and_rejects_mismatches() {
+        let (zone, aisle, rack, position) = location_tree();
+        assert_eq!(aisle.parent_id.as_deref(), Some(zone.id.as_str()));
+        assert_eq!(rack.parent_id.as_deref(), Some(aisle.id.as_str()));
+        assert_eq!(position.parent_id.as_deref(), Some(rack.id.as_str()));
+
+        assert_eq!(
+            Location::new(
+                "zone-child",
+                "Z2",
+                "Zona 2",
+                LocationKind::Zone,
+                Some(&zone)
+            ),
+            Err(DomainError::InvalidLocationHierarchy)
+        );
+        assert_eq!(
+            Location::new("aisle-root", "A2", "Pasillo 2", LocationKind::Aisle, None),
+            Err(DomainError::InvalidLocationHierarchy)
+        );
+        assert_eq!(
+            Location::new(
+                "rack-under-zone",
+                "R2",
+                "Rack 2",
+                LocationKind::Rack,
+                Some(&zone)
+            ),
+            Err(DomainError::InvalidLocationHierarchy)
+        );
+        assert_eq!(
+            Location::new(
+                "position-under-aisle",
+                "P2",
+                "Posición 2",
+                LocationKind::Position,
+                Some(&aisle),
+            ),
+            Err(DomainError::InvalidLocationHierarchy)
+        );
+    }
+
+    #[test]
+    fn validates_location_fields_boundaries_and_update_atomicity() {
+        assert_eq!(
+            Location::new(" ", "Z1", "Zona", LocationKind::Zone, None),
+            Err(DomainError::EmptyField("identificador de ubicación"))
+        );
+        assert_eq!(
+            Location::new("z1", " ", "Zona", LocationKind::Zone, None),
+            Err(DomainError::EmptyField("código de ubicación"))
+        );
+        assert_eq!(
+            Location::new("z1", "Z1", " ", LocationKind::Zone, None),
+            Err(DomainError::EmptyField("nombre de ubicación"))
+        );
+
+        let boundary = Location::new(
+            "z-limit",
+            "c".repeat(64),
+            "n".repeat(120),
+            LocationKind::Zone,
+            None,
+        )
+        .unwrap();
+        assert_eq!(boundary.code.len(), 64);
+        assert_eq!(boundary.name.len(), 120);
+        assert_eq!(
+            Location::new(
+                "z-long-code",
+                "c".repeat(65),
+                "Zona",
+                LocationKind::Zone,
+                None,
+            ),
+            Err(DomainError::FieldTooLong("código de ubicación"))
+        );
+        assert_eq!(
+            Location::new(
+                "z-long-name",
+                "Z2",
+                "n".repeat(121),
+                LocationKind::Zone,
+                None,
+            ),
+            Err(DomainError::FieldTooLong("nombre de ubicación"))
+        );
+
+        let (_, _, _, mut position) = location_tree();
+        let before = position.clone();
+        assert_eq!(
+            position.update_details("P".repeat(65), "Posición nueva"),
+            Err(DomainError::FieldTooLong("código de ubicación"))
+        );
+        assert_eq!(position, before);
+        assert_eq!(
+            position.update_details("P2", "n".repeat(121)),
+            Err(DomainError::FieldTooLong("nombre de ubicación"))
+        );
+        assert_eq!(position, before);
+
+        position.update_details(" P2 ", " Posición nueva ").unwrap();
+        assert_eq!(position.code, "P2");
+        assert_eq!(position.name, "Posición nueva");
+        position.deactivate();
+        assert!(!position.active);
+    }
+
+    #[test]
+    fn normalizes_lines_and_distinguishes_lots_for_duplicate_detection() {
+        let line_with_lot = HandlingUnitLine::new(" sku-1 ", u32::MAX, Some(" lot-a ")).unwrap();
+        assert_eq!(line_with_lot.sku.as_str(), "SKU-1");
+        assert_eq!(line_with_lot.quantity, u32::MAX);
+        assert_eq!(line_with_lot.lot_code.as_deref(), Some("lot-a"));
+        assert_eq!(
+            HandlingUnitLine::new("SKU-1", 1, Some("  "))
+                .unwrap()
+                .lot_code,
+            None
+        );
+
+        let lines = vec![
+            HandlingUnitLine::new("sku-1", 1, Some("lot-a")).unwrap(),
+            HandlingUnitLine::new("SKU-1", 2, Some("lot-b")).unwrap(),
+        ];
+        assert!(HandlingUnit::new("unit-lots", "PALLET-LOTS", lines).is_ok());
+
+        let duplicate_lines = vec![
+            HandlingUnitLine::new("sku-1", 1, Some(" lot-a ")).unwrap(),
+            HandlingUnitLine::new("SKU-1", 2, Some("lot-a")).unwrap(),
+        ];
+        assert_eq!(
+            HandlingUnit::new("unit-duplicate-lot", "PALLET-DUP", duplicate_lines),
+            Err(DomainError::DuplicateHandlingUnitLine)
+        );
+    }
+
+    #[test]
+    fn validates_handling_unit_required_fields_and_label_boundary() {
+        assert_eq!(
+            HandlingUnit::new("unit-empty", "PALLET-EMPTY", vec![]),
+            Err(DomainError::HandlingUnitNeedsLines)
+        );
+        assert_eq!(
+            HandlingUnit::new(" ", "PALLET-1", vec![line("SKU-1", 1)]),
+            Err(DomainError::EmptyField("identificador de unidad"))
+        );
+        assert_eq!(
+            HandlingUnit::new("unit-1", " ", vec![line("SKU-1", 1)]),
+            Err(DomainError::EmptyField("etiqueta de unidad"))
+        );
+
+        let boundary =
+            HandlingUnit::new("unit-boundary", "L".repeat(120), vec![line("SKU-1", 1)]).unwrap();
+        assert_eq!(boundary.label.len(), 120);
+        assert_eq!(
+            HandlingUnit::new("unit-too-long", "L".repeat(121), vec![line("SKU-1", 1)]),
+            Err(DomainError::FieldTooLong("etiqueta de unidad"))
+        );
+    }
+
+    #[test]
+    fn receives_moves_and_dispatches_a_unit_through_valid_states() {
+        let (_, _, rack, first_position) = location_tree();
+        let second_position = Location::new(
+            "p2",
+            "P2",
+            "Posición 2",
+            LocationKind::Position,
+            Some(&rack),
+        )
+        .unwrap();
+        let mut unit = HandlingUnit::new("unit-1", "PALLET-1", vec![line("SKU-1", 2)]).unwrap();
+        assert_eq!(unit.status, HandlingUnitStatus::Received);
+        assert_eq!(unit.current_location_id, None);
+
+        unit.assign_location(&first_position, false).unwrap();
+        assert_eq!(unit.status, HandlingUnitStatus::Stored);
+        assert_eq!(unit.current_location_id.as_deref(), Some("p1"));
+
+        unit.assign_location(&second_position, false).unwrap();
+        assert_eq!(unit.status, HandlingUnitStatus::Stored);
+        assert_eq!(unit.current_location_id.as_deref(), Some("p2"));
+
+        unit.dispatch().unwrap();
+        assert_eq!(unit.status, HandlingUnitStatus::Dispatched);
+        assert_eq!(unit.current_location_id, None);
+    }
+
+    #[test]
+    fn rejects_invalid_assignment_and_dispatch_without_mutating_the_unit() {
+        let (_, _, rack, position) = location_tree();
+        let other_position = Location::new(
+            "p2",
+            "P2",
+            "Posición 2",
+            LocationKind::Position,
+            Some(&rack),
+        )
+        .unwrap();
+        let mut inactive_position = other_position.clone();
+        inactive_position.deactivate();
+        let mut unit = HandlingUnit::new("unit-1", "PALLET-1", vec![line("SKU-1", 1)]).unwrap();
+        let received = unit.clone();
+
+        assert_eq!(
+            unit.assign_location(&rack, false),
+            Err(DomainError::LocationMustBeActivePosition)
+        );
+        assert_eq!(unit, received);
+        assert_eq!(
+            unit.assign_location(&inactive_position, false),
+            Err(DomainError::LocationMustBeActivePosition)
+        );
+        assert_eq!(unit, received);
+
+        unit.assign_location(&position, false).unwrap();
+        let stored = unit.clone();
+        assert_eq!(
+            unit.assign_location(&other_position, true),
+            Err(DomainError::PositionOccupied)
+        );
+        assert_eq!(unit, stored);
+        unit.assign_location(&position, true).unwrap();
+        assert_eq!(unit, stored);
+
+        unit.dispatch().unwrap();
+        let dispatched = unit.clone();
+        assert_eq!(
+            unit.assign_location(&position, false),
+            Err(DomainError::InvalidTransition)
+        );
+        assert_eq!(unit, dispatched);
+    }
+
+    #[test]
+    fn validates_movement_event_identity_timestamp_and_optional_locations() {
+        for timestamp in [0, -1] {
+            assert_eq!(
+                MovementEvent::new(
+                    "event-1",
+                    "unit-1",
+                    MovementKind::Received,
+                    None::<&str>,
+                    None::<&str>,
+                    timestamp,
+                    "desktop_ui",
+                ),
+                Err(DomainError::InvalidTimestamp)
+            );
+        }
+
+        assert_eq!(
+            MovementEvent::new(
+                " ",
+                "unit-1",
+                MovementKind::Received,
+                None::<&str>,
+                None::<&str>,
+                1,
+                "desktop_ui",
+            ),
+            Err(DomainError::EmptyField("identificador de evento"))
+        );
+        assert_eq!(
+            MovementEvent::new(
+                "event-1",
+                " ",
+                MovementKind::Received,
+                None::<&str>,
+                None::<&str>,
+                1,
+                "desktop_ui",
+            ),
+            Err(DomainError::EmptyField("unidad de manipulación"))
+        );
+        assert_eq!(
+            MovementEvent::new(
+                "event-1",
+                "unit-1",
+                MovementKind::Moved,
+                Some(" "),
+                None::<&str>,
+                1,
+                "desktop_ui",
+            ),
+            Err(DomainError::EmptyField("ubicación de origen"))
+        );
+
+        let event = MovementEvent::new(
+            " event-1 ",
+            " unit-1 ",
+            MovementKind::Moved,
+            Some(" p1 "),
+            Some(" p2 "),
+            1,
+            " desktop_ui ",
+        )
+        .unwrap();
+        assert_eq!(event.event_id, "event-1");
+        assert_eq!(event.handling_unit_id, "unit-1");
+        assert_eq!(event.origin_location_id.as_deref(), Some("p1"));
+        assert_eq!(event.destination_location_id.as_deref(), Some("p2"));
+        assert_eq!(event.source, "desktop_ui");
+    }
+
+    #[test]
+    fn validates_correction_timestamp_required_fields_and_maximum_reason() {
+        assert_eq!(
+            MovementCorrection::new("correction-1", "unit-1", "event-1", "motivo", 0, "manual"),
+            Err(DomainError::InvalidTimestamp)
+        );
+        assert_eq!(
+            MovementCorrection::new(" ", "unit-1", "event-1", "motivo", 1, "manual"),
+            Err(DomainError::EmptyField("identificador de corrección"))
+        );
+        assert_eq!(
+            MovementCorrection::new(
+                "correction-1",
+                "unit-1",
+                "event-1",
+                "x".repeat(501),
+                1,
+                "manual"
+            ),
+            Err(DomainError::FieldTooLong("motivo de corrección"))
+        );
+
+        let correction = MovementCorrection::new(
+            " correction-1 ",
+            " unit-1 ",
+            " event-1 ",
+            "x".repeat(500),
+            1,
+            " manual ",
+        )
+        .unwrap();
+        assert_eq!(correction.correction_id, "correction-1");
+        assert_eq!(correction.handling_unit_id, "unit-1");
+        assert_eq!(correction.corrects_event_id, "event-1");
+        assert_eq!(correction.reason.len(), 500);
+        assert_eq!(correction.source, "manual");
+    }
+
+    #[test]
+    fn creates_alerts_with_exact_event_and_attempt_targets() {
+        assert_eq!(
+            AlertIntent::new(" ", "duplicate", 1),
+            Err(DomainError::EmptyField("prefijo de alerta"))
+        );
+        assert_eq!(
+            AlertIntent::new("prefix", " ", 1),
+            Err(DomainError::EmptyField("tipo de alerta"))
+        );
+        assert_eq!(
+            AlertIntent::new("prefix", "duplicate", 0),
+            Err(DomainError::InvalidTimestamp)
+        );
+
+        let intent = AlertIntent::new(" sim-1 ", " duplicate ", 1).unwrap();
+        let event_target = AlertRecordTarget::MovementEvent {
+            event_id: "event-1".to_owned(),
+        };
+        let first_attempt = AlertRecordTarget::MovementAttempt {
+            attempt_id: 7,
+            event_id: "event-1".to_owned(),
+        };
+        let second_attempt = AlertRecordTarget::MovementAttempt {
+            attempt_id: 8,
+            event_id: "event-1".to_owned(),
+        };
+
+        let event_alert = Alert::from_intent(&intent, event_target.clone()).unwrap();
+        let attempt_alert = Alert::from_intent(&intent, first_attempt.clone()).unwrap();
+        let next_attempt_alert = Alert::from_intent(&intent, second_attempt.clone()).unwrap();
+        assert_eq!(event_alert.id, "sim-1-event");
+        assert_eq!(event_alert.status, AlertStatus::Open);
+        assert_eq!(event_alert.target.record_id(), "event-1");
+        assert_eq!(event_alert.target.kind(), "movement_event");
+        assert_eq!(event_alert.target.movement_event_id(), Some("event-1"));
+        assert_eq!(event_alert.target.movement_attempt_id(), None);
+
+        assert_eq!(attempt_alert.id, "sim-1-attempt-7");
+        assert_eq!(attempt_alert.target.record_id(), "attempt:7");
+        assert_eq!(attempt_alert.target.kind(), "movement_attempt");
+        assert_eq!(attempt_alert.target.event_id(), "event-1");
+        assert_eq!(attempt_alert.target.movement_event_id(), None);
+        assert_eq!(attempt_alert.target.movement_attempt_id(), Some(7));
+        assert_ne!(attempt_alert.id, next_attempt_alert.id);
+
+        let reviewed = Alert::from_persisted(
+            "alert-reviewed",
+            second_attempt.clone(),
+            "duplicate",
+            2,
+            AlertStatus::Reviewed,
+        )
+        .unwrap();
+        assert_eq!(reviewed.status, AlertStatus::Reviewed);
+        assert_eq!(reviewed.target, second_attempt);
+    }
+
+    #[test]
+    fn domain_enums_have_stable_external_names() {
+        assert_eq!(LocationKind::Zone.as_str(), "zone");
+        assert_eq!(LocationKind::Aisle.as_str(), "aisle");
+        assert_eq!(LocationKind::Rack.as_str(), "rack");
+        assert_eq!(LocationKind::Position.as_str(), "position");
+        assert_eq!(HandlingUnitStatus::Received.as_str(), "received");
+        assert_eq!(HandlingUnitStatus::Stored.as_str(), "stored");
+        assert_eq!(HandlingUnitStatus::Dispatched.as_str(), "dispatched");
+        assert_eq!(MovementKind::Received.as_str(), "received");
+        assert_eq!(MovementKind::Stored.as_str(), "stored");
+        assert_eq!(MovementKind::Moved.as_str(), "moved");
+        assert_eq!(MovementKind::Dispatched.as_str(), "dispatched");
+        assert_eq!(AlertStatus::Open.as_str(), "open");
+        assert_eq!(AlertStatus::Reviewed.as_str(), "reviewed");
+        assert_eq!(AlertStatus::Resolved.as_str(), "resolved");
+    }
 }
