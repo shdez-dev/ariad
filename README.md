@@ -53,6 +53,8 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md) y la [matriz de trazabilidad](docs/trazabilidad.md).
 
+El workflow de integración continua valida cada push y pull request en Windows. Consulta la [guía de CI](docs/continuous-integration.md) para ver los chequeos y sus equivalentes locales.
+
 ## Trabajo siguiente
 
 1. Continuar con ARD-20 y configurar CI para formato, Clippy, pruebas y compilación.
@@ -70,6 +72,7 @@ npm run test:ipc
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+npm run tauri -- build --no-bundle
 ```
 
 ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`; ARD-14 en `feat/ard-14-search-history-alerts`, commit `a1925d2`; ARD-15 en `feat/ard-15-simulator`, commit `b8dbf20`; ARD-16 en `feat/ard-16-diagnostics`, commit `ecfee57`; ARD-17 en `feat/ard-17-domain-tests`, commit `1097d5a`; ARD-18 en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`; ARD-19 en `feat/ard-19-tauri-security`, commit `8b5ea7c`. La inspección visual manual de las vistas Tauri continúa pendiente; las pruebas automatizadas no la sustituyen.
