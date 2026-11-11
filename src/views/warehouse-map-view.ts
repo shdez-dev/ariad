@@ -1,4 +1,5 @@
 import { inventoryIpc, type HandlingUnitDto, type LocationDto } from "../lib/ipc";
+import { locationKindLabels } from "../lib/catalog-model";
 import {
   buildWarehouseMap,
   getPositionState,
@@ -160,7 +161,7 @@ function renderLocationGroup(node: LocationTreeNode): HTMLElement {
   summary.dataset.mapFocusId = node.location.id;
   const copy = createElement("span", "location-summary-copy");
   copy.append(
-    createElement("span", "location-kind", node.location.kind),
+    createElement("span", "location-kind", locationKindLabels[node.location.kind]),
     createElement("strong", "location-name", node.location.name),
     createElement("span", "location-code", node.location.code),
   );

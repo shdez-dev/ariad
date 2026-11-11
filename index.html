@@ -87,7 +87,7 @@
         <div class="module-toolbar">
           <label class="search-field" for="products-filter">
             <span aria-hidden="true">⌕</span>
-            <input id="products-filter" type="search" placeholder="Filtrar por SKU o descripción" autocomplete="off" />
+            <input id="products-filter" type="search" aria-label="Filtrar productos por SKU o descripción" placeholder="Filtrar por SKU o descripción" autocomplete="off" />
           </label>
           <label class="check-field"><input id="products-include-inactive" type="checkbox" /> Mostrar inactivos</label>
           <button class="secondary-button" id="products-refresh" type="button">Actualizar</button>
@@ -133,7 +133,7 @@
         <div class="module-toolbar">
           <label class="search-field" for="locations-filter">
             <span aria-hidden="true">⌕</span>
-            <input id="locations-filter" type="search" placeholder="Filtrar por código, nombre o nivel" autocomplete="off" />
+            <input id="locations-filter" type="search" aria-label="Filtrar ubicaciones por código, nombre o nivel" placeholder="Filtrar por código, nombre o nivel" autocomplete="off" />
           </label>
           <label class="check-field"><input id="locations-include-inactive" type="checkbox" checked /> Mostrar inactivas</label>
           <button class="secondary-button" id="locations-refresh" type="button">Actualizar</button>
@@ -182,7 +182,7 @@
         <div class="module-toolbar">
           <label class="search-field" for="units-filter">
             <span aria-hidden="true">⌕</span>
-            <input id="units-filter" type="search" placeholder="Filtrar por etiqueta, ID, SKU o ubicación" autocomplete="off" />
+            <input id="units-filter" type="search" aria-label="Filtrar unidades por etiqueta, ID, SKU o ubicación" placeholder="Filtrar por etiqueta, ID, SKU o ubicación" autocomplete="off" />
           </label>
         </div>
         <p class="module-status" id="units-status" role="status" aria-live="polite">Las unidades aparecerán aquí.</p>
@@ -308,7 +308,7 @@
         <div class="module-toolbar">
           <label class="search-field" for="inventory-search-input">
             <span aria-hidden="true">⌕</span>
-            <input id="inventory-search-input" type="search" maxlength="120" placeholder="SKU, etiqueta, código o nombre" autocomplete="off" />
+            <input id="inventory-search-input" type="search" aria-label="Buscar productos, pallets o ubicaciones" maxlength="120" placeholder="SKU, etiqueta, código o nombre" autocomplete="off" />
           </label>
           <button class="secondary-button" id="inventory-search-clear" type="button">Limpiar</button>
         </div>

@@ -57,9 +57,12 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 ## Trabajo siguiente
 
-1. Cerrar la aceptación visual manual de ARD-11 a ARD-15 en la ventana Tauri.
-2. Revisar manualmente el instalador y el informe publicados por CI para cerrar ARD-22.
-3. Continuar con la guía de operación, aceptación de versión candidata y documentación de portfolio.
+1. Revisar manualmente el instalador NSIS y el informe del artefacto de CI para cerrar ARD-22.
+2. Completar y registrar los criterios visuales pendientes de ARD-11 a ARD-15 en la ventana Tauri: teclado, CRUD/errores/estados vacíos, rechazos operativos y escenarios del simulador.
+3. Ejecutar ARD-23: documentar operación, copia y restauración de SQLite, y validar el procedimiento con una restauración de prueba.
+4. Ejecutar ARD-24: preparar la guía pública de instalación y demostración para portfolio con límites y versiones verificables.
+5. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
+6. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
 
 ## Verificación local
 
