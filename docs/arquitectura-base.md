@@ -49,7 +49,7 @@ ARD-15 añade la vista Simulador para ejecutar los cinco escenarios con una semi
 
 ## Estado de implementación y límites
 
-ARD-10 a ARD-15 se implementaron en incrementos publicados. ARD-15 está en `feat/ard-15-simulator`, commit `b8dbf20`; la migración de alertas mantiene vínculos exactos a eventos e intentos. ARD-16 agrega el diagnóstico local descrito arriba y está en implementación. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente. La aplicación sigue siendo un prototipo local con datos sintéticos, no validado para una operación real de bodega.
+ARD-10 a ARD-16 se implementaron en incrementos publicados. ARD-15 está en `feat/ard-15-simulator`, commit `b8dbf20`; la migración de alertas mantiene vínculos exactos a eventos e intentos. ARD-16 está publicada en `feat/ard-16-diagnostics`, commit `ecfee57`, y agrega los registros locales descritos arriba. La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente. La aplicación sigue siendo un prototipo local con datos sintéticos, no validado para una operación real de bodega.
 
-Verificación de ARD-15: 50 pruebas Rust, formato, Clippy, compilación TypeScript/Vite y 12 pruebas frontend pasan. La verificación actual de ARD-16 se actualizará después de cerrar las pruebas y publicar el incremento.
+Verificación de ARD-16: 54 pruebas Rust, formato, Clippy, compilación TypeScript/Vite y 14 pruebas frontend pasan. La inspección visual manual de las vistas Tauri no forma parte de estas pruebas automatizadas.
 
