@@ -107,6 +107,17 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
   }
 }
 
+async function callInventoryMovement<T>(
+  command: string,
+  args: Record<string, unknown>,
+): Promise<T> {
+  const result = await call<T>(command, args);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("ariadna:inventory-changed"));
+  }
+  return result;
+}
+
 export function newEventId(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -157,20 +168,20 @@ export const inventoryIpc = {
     lines: ReceiveLineInput[];
     eventId: string;
     occurredAtMs: number;
-  }) => call<MovementWriteDto>("receive_unit", input),
+  }) => callInventoryMovement<MovementWriteDto>("receive_unit", input),
   moveUnit: (input: {
     eventId: string;
     handlingUnitId: string;
     originLocationId: string;
     destinationLocationId: string;
     occurredAtMs: number;
-  }) => call<MovementWriteDto>("move_unit", input),
+  }) => callInventoryMovement<MovementWriteDto>("move_unit", input),
   dispatchUnit: (input: {
     eventId: string;
     handlingUnitId: string;
     originLocationId: string;
     occurredAtMs: number;
-  }) => call<MovementWriteDto>("dispatch_unit", input),
+  }) => callInventoryMovement<MovementWriteDto>("dispatch_unit", input),
   recordMovementCorrection: (input: {
     correctionId: string;
     handlingUnitId: string;

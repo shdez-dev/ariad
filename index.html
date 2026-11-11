@@ -3,66 +3,71 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f2f5f7" />
-    <meta name="description" content="Prototipo local de inventario por zonas para una bodega de demostración." />
+    <meta name="theme-color" content="#f4f6f4" />
+    <meta name="description" content="Mapa lógico de ubicaciones y ocupación de la bodega de demostración Ariadna." />
     <link rel="stylesheet" href="/src/styles.css" />
-    <title>Ariadna | Inventario de bodega</title>
+    <title>Ariadna | Mapa de bodega</title>
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="topbar">
-        <a class="brand" href="#inicio" aria-label="Ariadna, inicio">
-          <span class="brand-mark" aria-hidden="true">A</span>
-          <span class="brand-copy">
-            <strong>Ariadna</strong>
-            <small>Inventario por zonas</small>
-          </span>
-        </a>
-        <span class="environment-badge"><span class="status-dot" aria-hidden="true"></span>Prototipo local</span>
-      </header>
+    <header class="topbar">
+      <a class="brand" href="#inicio" aria-label="Ariadna, mapa de bodega">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span class="brand-copy">
+          <strong>Ariadna</strong>
+          <small>Inventario por zonas</small>
+        </span>
+      </a>
+      <div class="topbar-meta">
+        <span class="environment-badge"><span class="status-dot" aria-hidden="true"></span>Datos locales</span>
+        <span class="user-mark" aria-label="Aplicación de escritorio">AR</span>
+      </div>
+    </header>
 
-      <section class="intro" id="inicio" aria-labelledby="page-title">
-        <p class="eyebrow">BODEGA DE DEMOSTRACIÓN</p>
-        <h1 id="page-title">Ubicación e historial, en un solo lugar.</h1>
-        <p class="intro-copy">Ariadna ayudará a consultar dónde debería estar cada pallet y revisar los movimientos que explican su estado.</p>
-      </section>
-
-      <section class="readiness" aria-labelledby="readiness-title">
-        <div class="readiness-icon" aria-hidden="true">✓</div>
-        <div>
-          <h2 id="readiness-title">La ventana de Ariadna está lista</h2>
-          <p>Esta primera versión confirma el arranque de escritorio. El inventario y las operaciones se incorporarán en los siguientes pasos.</p>
+    <main class="app-shell" id="inicio">
+      <section class="page-heading" aria-labelledby="page-title">
+        <div class="page-heading-copy">
+          <p class="eyebrow"><span class="eyebrow-mark" aria-hidden="true">01</span> MAPA LÓGICO</p>
+          <h1 id="page-title">La bodega, organizada por ubicación.</h1>
+          <p class="intro-copy">Consulta zonas, pasillos, racks y posiciones junto al estado de ocupación registrado en el inventario.</p>
         </div>
-        <span class="readiness-tag">Base Tauri v2</span>
+        <button class="refresh-button" id="refresh-map" type="button">
+          <span aria-hidden="true">↻</span>
+          <span>Actualizar mapa</span>
+        </button>
       </section>
 
-      <section class="work-grid" aria-label="Módulos previstos">
-        <article class="work-card">
-          <span class="card-index">01</span>
-          <h2>Ubicaciones</h2>
-          <p>Zonas, pasillos, racks y posiciones configurados para la demostración.</p>
-          <span class="card-state">Próximo: modelo de dominio</span>
-        </article>
-        <article class="work-card">
-          <span class="card-index">02</span>
-          <h2>Pallets</h2>
-          <p>Catálogo de productos y unidades de manipulación con cantidades.</p>
-          <span class="card-state">Datos sintéticos</span>
-        </article>
-        <article class="work-card">
-          <span class="card-index">03</span>
-          <h2>Movimientos</h2>
-          <p>Recepción, asignación, traslado y despacho con historial trazable.</p>
-          <span class="card-state">Simulación, sin lectores físicos</span>
-        </article>
-      </section>
+      <section class="summary-grid" id="warehouse-summary" aria-label="Resumen de bodega"></section>
+
+      <div class="map-layout">
+        <section class="map-panel" id="map-panel" aria-labelledby="map-title" aria-busy="true">
+          <div class="panel-heading">
+            <div>
+              <p class="section-kicker">ESTRUCTURA REGISTRADA</p>
+              <h2 id="map-title">Zonas y posiciones</h2>
+            </div>
+            <span class="scale-note"><span aria-hidden="true">⌖</span> Vista lógica, no a escala</span>
+          </div>
+
+          <div class="map-legend" aria-label="Estados de posición">
+            <span class="legend-item"><span class="legend-symbol legend-free" aria-hidden="true">○</span>Libre</span>
+            <span class="legend-item"><span class="legend-symbol legend-occupied" aria-hidden="true">●</span>Ocupada</span>
+            <span class="legend-item"><span class="legend-symbol legend-inactive" aria-hidden="true">–</span>Inactiva</span>
+          </div>
+
+          <p class="map-status" id="map-status" role="status" aria-live="polite">Cargando datos de la bodega…</p>
+          <div class="warehouse-map" id="warehouse-map" aria-busy="true"></div>
+        </section>
+
+        <aside class="detail-panel" id="position-details" aria-label="Detalle de posición"></aside>
+      </div>
+
+      <div class="sr-only" id="selection-announcement" role="status" aria-live="polite" aria-atomic="true"></div>
 
       <footer class="app-footer">
-        <span>Sin inventario real cargado</span>
-        <span>La interfaz no usa una API HTTP local</span>
+        <span><span class="footer-dot" aria-hidden="true"></span>Información guardada localmente</span>
+        <span>Sin robots ni lectores físicos</span>
       </footer>
     </main>
   </body>
 </html>
-

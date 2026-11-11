@@ -48,6 +48,8 @@ Cuando una operación falla, la promesa de `invoke` se rechaza con `{ code, mess
 
 Los detalles internos, como errores SQLite, se escriben en `logs/ariadna.log`; no se incluyen en los mensajes IPC. Una operación rechazada no confirma cambios parciales.
 
+Después de una recepción, traslado o despacho confirmado, el wrapper emite el evento de ventana `ariadna:inventory-changed`. Las vistas que dependen de ocupación, como el mapa lógico de ARD-11, lo escuchan para volver a consultar las ubicaciones y unidades persistidas. El evento no se emite si el comando falla.
+
 ## Verificación
 
 - Pruebas Rust para búsqueda de unidades por ID o etiqueta, líneas, estado, orden y filtrado de despachadas.

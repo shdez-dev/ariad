@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc && vite build",
+    "test:map": "node --experimental-strip-types --test tests/warehouse-map.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {
