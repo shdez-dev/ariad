@@ -3551,7 +3551,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migrations_run_on_a_clean_database_and_a_file_copy() {
+    async fn a_restored_backup_passes_integrity_and_keeps_inventory() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -3559,35 +3559,58 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("ariadna-sqlite-{unique}"));
         std::fs::create_dir_all(&directory).unwrap();
         let original_path = directory.join("original.sqlite3");
-        let copy_path = directory.join("copy.sqlite3");
+        let backup_path = directory.join("backup.sqlite3");
+        let restore_directory = directory.join("restored");
+        std::fs::create_dir_all(&restore_directory).unwrap();
+        let restored_path = restore_directory.join("ariadna.sqlite3");
 
         let original = SqliteDatabase::open(&original_path).await.unwrap();
         SqliteInventoryRepository::new(&original)
             .insert_product(&Product::new("SKU-COPY", "Caja", "unidad").unwrap())
             .await
             .unwrap();
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .fetch_one(original.pool())
-            .await
-            .unwrap();
+        let (busy, log_frames, checkpointed_frames) =
+            sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(TRUNCATE)")
+                .fetch_one(original.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            busy, 0,
+            "the backup checkpoint must finish without a busy database"
+        );
+        assert_eq!(
+            log_frames, checkpointed_frames,
+            "all WAL frames must be checkpointed before copying the database"
+        );
+        let original_migration_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(original.pool())
+                .await
+                .unwrap();
         original.close().await;
-        std::fs::copy(&original_path, &copy_path).unwrap();
+        std::fs::copy(&original_path, &backup_path).unwrap();
+        std::fs::copy(&backup_path, &restored_path).unwrap();
 
-        let copied = SqliteDatabase::open(&copy_path).await.unwrap();
+        let restored = SqliteDatabase::open(&restored_path).await.unwrap();
         let product_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku = 'SKU-COPY'")
-                .fetch_one(copied.pool())
+                .fetch_one(restored.pool())
                 .await
                 .unwrap();
         let migration_count: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
-                .fetch_one(copied.pool())
+                .fetch_one(restored.pool())
                 .await
                 .unwrap();
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(restored.pool())
+            .await
+            .unwrap();
         assert_eq!(product_count, 1);
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, original_migration_count);
+        assert_eq!(integrity, "ok");
 
-        copied.close().await;
+        restored.close().await;
         std::fs::remove_dir_all(directory).unwrap();
     }
 

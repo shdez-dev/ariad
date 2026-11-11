@@ -51,7 +51,7 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 - No hay API HTTP de negocio ni permisos generales de shell, filesystem o red habilitados.
 - El simulador invoca los casos de uso de recepción, asignación, traslado y despacho; no tiene persistencia paralela y no habla por HTTP ni MQTT. Una misma semilla genera los mismos IDs de evento y tiempos. Las filas de intentos son append-only y cada ejecución de una anomalía puede añadir un intento y alerta nuevos.
 
-Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md) y la [matriz de trazabilidad](docs/trazabilidad.md).
+Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md), la [matriz de trazabilidad](docs/trazabilidad.md) y la [guía de operación, copias y restauración](docs/operacion/copias-y-restauracion.md).
 
 El workflow de integración continua valida cada push y pull request en Windows. ARD-22 añade la generación del instalador NSIS, prueba aislada de instalación e inicio, verificación de la base local y desinstalación, además de publicar instalador e informe como artefacto temporal de Actions. Consulta la [guía de CI](docs/continuous-integration.md) y la [guía del instalador Windows](docs/distribution/windows-installer.md) para los chequeos y ubicaciones.
 
@@ -59,7 +59,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 1. Repetir la carga del artefacto de ARD-22, inspeccionar el instalador actual y cotejar su hash, informe y firma.
 2. Completar y registrar los criterios visuales pendientes de ARD-11 a ARD-15 en la ventana Tauri: teclado, CRUD/errores/estados vacíos, rechazos operativos y escenarios del simulador.
-3. Ejecutar ARD-23: documentar operación, copia y restauración de SQLite, y validar el procedimiento con una restauración de prueba.
+3. Finalizar ARD-23: probar checkpoint y restauración en una base temporal, y publicar la guía operativa con sus límites explícitos.
 4. Ejecutar ARD-24: preparar la guía pública de instalación y demostración para portfolio con límites y versiones verificables.
 5. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
 6. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
@@ -82,4 +82,4 @@ cargo run --release --manifest-path src-tauri/Cargo.toml --example ard21_benchma
 
 La última orden crea una base y un informe sintéticos en la carpeta temporal de Windows. Consulta [la línea base de rendimiento de ARD-21](docs/performance/ard-21-baseline.md) para metodología, resultados y limitaciones.
 
-ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`; ARD-14 en `feat/ard-14-search-history-alerts`, commit `a1925d2`; ARD-15 en `feat/ard-15-simulator`, commit `b8dbf20`; ARD-16 en `feat/ard-16-diagnostics`, commit `ecfee57`; ARD-17 en `feat/ard-17-domain-tests`, commit `1097d5a`; ARD-18 en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`; ARD-19 en `feat/ard-19-tauri-security`, commit `8b5ea7c`; ARD-20 en `feat/ard-20-ci`, commit `202772a`; ARD-21 en `feat/ard-21-performance`, commit `3acb839`. La inspección visual manual de las vistas Tauri continúa pendiente; las pruebas automatizadas no la sustituyen.
+ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`; ARD-14 en `feat/ard-14-search-history-alerts`, commit `a1925d2`; ARD-15 en `feat/ard-15-simulator`, commit `b8dbf20`; ARD-16 en `feat/ard-16-diagnostics`, commit `ecfee57`; ARD-17 en `feat/ard-17-domain-tests`, commit `1097d5a`; ARD-18 en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`; ARD-19 en `feat/ard-19-tauri-security`, commit `8b5ea7c`; ARD-20 en `feat/ard-20-ci`, commit `202772a`; ARD-21 en `feat/ard-21-performance`, commit `3acb839`. La aceptación visual de ARD-11 a ARD-15 está parcialmente registrada y conserva criterios pendientes; las pruebas automatizadas no sustituyen esa revisión.
