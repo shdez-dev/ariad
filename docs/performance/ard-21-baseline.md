@@ -14,7 +14,7 @@ El ejemplo `src-tauri/examples/ard21_benchmark.rs` crea una base SQLite temporal
 | Eventos | 10.000 movimientos aceptados, 20 por unidad; ningún movimiento rechazado |
 | Posiciones libres | Dos; una sirve de destino alterno para el movimiento medido |
 
-La secuencia de siembra respeta la jerarquía, unicidad de posiciones, reglas de estado e historial append-only de la aplicación. Antes de medir, el ejemplo consulta y comprueba las cantidades, estados, eventos aceptados, coincidencias de búsqueda e historial esperado.
+La secuencia de siembra respeta la jerarquía, unicidad de posiciones, reglas de estado e historial append-only de la aplicación. Antes de medir, el ejemplo comprueba las cantidades exactas de productos, líneas, unidades, ubicaciones, estados y eventos, confirma que `movement_attempts` esté vacío y verifica las 21 coincidencias de búsqueda y las 20 entradas del historial.
 
 ## Operaciones medidas
 
@@ -60,7 +60,7 @@ Resultados p50/p95 de cada repetición:
 | 2 | 6,019 / 17,252 | 0,305 / 0,389 | 2,646 / 6,593 |
 | 3 | 6,329 / 26,443 | 0,289 / 0,410 | 1,853 / 3,087 |
 
-La meta provisional de p95 <= 2 s se cumple en las tres repeticiones. El mayor p95 observado fue 60,323 ms en movimientos. La dispersión de ese indicador muestra que el tiempo de disco y la actividad del equipo influyen en mediciones locales; por eso se informan los rangos y no se presenta un único resultado como garantía.
+La meta provisional de p95 <= 2 s se cumple en las tres repeticiones. El mayor p95 observado fue 60,323 ms en movimientos. Las mediciones muestran dispersión, pero no aíslan su causa; los rangos se conservan para que el resultado no se reduzca a una sola corrida.
 
 ## Reproducir
 
@@ -70,7 +70,7 @@ Desde la raíz del repositorio, con Rust y las herramientas de compilación de W
 cargo run --release --manifest-path src-tauri/Cargo.toml --example ard21_benchmark
 ```
 
-El comando crea una base sintética y un informe Markdown con el mismo nombre bajo la carpeta temporal del sistema. También se puede indicar una ruta nueva como argumento. Si la base ya existe, el ejemplo termina sin sobrescribirla. Los archivos temporales son exclusivamente sintéticos y pueden eliminarse después de conservar el informe.
+El comando crea una base sintética y un informe Markdown con el mismo nombre bajo la carpeta temporal del sistema. También se puede indicar una ruta nueva como argumento. El programa rechaza rutas o informes preexistentes y nunca los sobrescribe. El informe registra el commit, `rustc`, versión de SQLite, sistema y hardware detectados, además de indicar por operación si cumple la meta; guarda solo el nombre de la base para no incluir una ruta local de usuario. Las evidencias archivadas de las tres ejecuciones que sustentan las tablas se conservan en `docs/performance/evidence/`.
 
 ## Limitaciones y lectura
 

@@ -1,8 +1,11 @@
 use std::{
     error::Error,
+    fs::OpenOptions,
     future::Future,
     hint::black_box,
-    path::PathBuf,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    process::Command,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -24,11 +27,18 @@ const EVENTS_PER_UNIT: usize = 20;
 const WARMUP_COUNT: usize = 10;
 const SAMPLE_COUNT: usize = 101;
 const EVENT_TIME_BASE_MS: i64 = 1_800_000_000_000;
+const TARGET_P95_MS: f64 = 2_000.0;
 
 #[derive(Debug)]
 struct Measurement {
     name: &'static str,
     samples_micros: Vec<u128>,
+}
+
+struct RuntimeMetadata {
+    git_revision: String,
+    rustc_version: String,
+    hardware: String,
 }
 
 impl Measurement {
@@ -44,6 +54,7 @@ impl Measurement {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
     let database_path = database_path_from_args()?;
+    let report_path = report_path_for_database(&database_path)?;
     if database_path.exists() {
         return Err(format!(
             "La base ya existe: {}. Usa una ruta nueva para preservar datos anteriores.",
@@ -51,6 +62,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .into());
     }
+    if report_path.exists() {
+        return Err(format!(
+            "El informe ya existe: {}. Usa una ruta nueva para no sobrescribirlo.",
+            report_path.display()
+        )
+        .into());
+    }
+    create_file_exclusive(&database_path)?;
 
     let database = SqliteDatabase::open(&database_path).await?;
     let repository: Arc<dyn InventoryRepository> =
@@ -64,7 +83,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let move_unit = MoveUnit::new(repository);
     let search_result_count = search.execute("SKU-000").await?.len();
     let history_entry_count = history.execute("unit-000000").await?.len();
-    if search_result_count == 0 || history_entry_count != EVENTS_PER_UNIT {
+    if search_result_count != 21 || history_entry_count != EVENTS_PER_UNIT {
         return Err(format!(
             "Las consultas de comprobación no coinciden con la carga: búsqueda={search_result_count}, historial={history_entry_count}"
         )
@@ -85,11 +104,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .fetch_one(database.pool())
         .await?;
     let run_time_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let report_path = database_path.with_extension("md");
+    let runtime_metadata = collect_runtime_metadata();
     let report = render_report(
         run_time_ms,
         &database_path,
         &sqlite_version,
+        &runtime_metadata,
         search_result_count,
         history_entry_count,
         [
@@ -98,7 +118,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             movement_measurement,
         ],
     );
-    std::fs::write(&report_path, &report)?;
+    write_report_exclusive(&report_path, &report)?;
 
     println!("{report}");
     println!("Base sintética: {}", database_path.display());
@@ -122,6 +142,93 @@ fn database_path_from_args() -> Result<PathBuf, Box<dyn Error>> {
         }
     };
     Ok(path)
+}
+
+fn report_path_for_database(database_path: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    if database_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+    {
+        return Err("La ruta de la base no puede usar extensión .md porque se sobrescribiría con el informe.".into());
+    }
+    Ok(database_path.with_extension("md"))
+}
+
+fn write_report_exclusive(path: &Path, report: &str) -> io::Result<()> {
+    let mut report_file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    report_file.write_all(report.as_bytes())
+}
+
+fn create_file_exclusive(path: &Path) -> io::Result<()> {
+    OpenOptions::new().write(true).create_new(true).open(path)?;
+    Ok(())
+}
+
+fn collect_runtime_metadata() -> RuntimeMetadata {
+    let git_revision = command_output(
+        "git",
+        &["rev-parse", "--short=12", "HEAD"],
+        Some(Path::new(env!("CARGO_MANIFEST_DIR"))),
+    )
+    .unwrap_or_else(|| "no disponible".to_owned());
+    let rustc_version =
+        command_output("rustc", &["--version"], None).unwrap_or_else(|| "no disponible".to_owned());
+    let hardware = machine_description();
+    RuntimeMetadata {
+        git_revision,
+        rustc_version,
+        hardware,
+    }
+}
+
+fn command_output(
+    program: &str,
+    args: &[&str],
+    working_directory: Option<&Path>,
+) -> Option<String> {
+    let mut command = Command::new(program);
+    command.args(args);
+    if let Some(working_directory) = working_directory {
+        command.current_dir(working_directory);
+    }
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+#[cfg(target_os = "windows")]
+fn machine_description() -> String {
+    let script = r#"$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; $os=Get-CimInstance Win32_OperatingSystem; [Console]::Write(('{0}|{1}|{2}|{3}' -f $cpu.Name,$cpu.NumberOfCores,$cpu.NumberOfLogicalProcessors,[math]::Round($os.TotalVisibleMemorySize/1MB,1)))"#;
+    let description = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+
+    if let Some(description) = description {
+        let fields: Vec<&str> = description.split('|').collect();
+        if fields.len() == 4 {
+            return format!(
+                "{}; {} núcleos, {} procesadores lógicos; {} GiB de memoria visible",
+                fields[0], fields[1], fields[2], fields[3]
+            );
+        }
+    }
+    format!(
+        "{} {} (detalle de hardware no disponible)",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn machine_description() -> String {
+    format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 async fn seed_dataset(repository: Arc<dyn InventoryRepository>) -> Result<(), Box<dyn Error>> {
@@ -270,6 +377,12 @@ async fn verify_dataset(database: &SqliteDatabase) -> Result<(), Box<dyn Error>>
         sqlx::query_scalar("SELECT COUNT(*) FROM locations WHERE kind = 'position'")
             .fetch_one(database.pool())
             .await?;
+    let product_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM products")
+        .fetch_one(database.pool())
+        .await?;
+    let line_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM handling_unit_lines")
+        .fetch_one(database.pool())
+        .await?;
     let movement_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_events")
         .fetch_one(database.pool())
         .await?;
@@ -281,21 +394,22 @@ async fn verify_dataset(database: &SqliteDatabase) -> Result<(), Box<dyn Error>>
         sqlx::query_scalar("SELECT COUNT(*) FROM handling_units WHERE status = 'dispatched'")
             .fetch_one(database.pool())
             .await?;
-    let rejected_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM movement_events WHERE result <> 'accepted'")
-            .fetch_one(database.pool())
-            .await?;
+    let attempt_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_attempts")
+        .fetch_one(database.pool())
+        .await?;
 
     if unit_count != UNIT_COUNT as i64
-        || location_count < 250
-        || position_count < 250
+        || location_count != (POSITION_COUNT + 3) as i64
+        || position_count != POSITION_COUNT as i64
+        || product_count != PRODUCT_COUNT as i64
+        || line_count != UNIT_COUNT as i64
         || movement_count != (UNIT_COUNT * EVENTS_PER_UNIT) as i64
         || stored_count != STORED_UNIT_COUNT as i64
         || dispatched_count != (UNIT_COUNT - STORED_UNIT_COUNT) as i64
-        || rejected_count != 0
+        || attempt_count != 0
     {
         return Err(format!(
-            "El conjunto generado no cumple los invariantes: unidades={unit_count}, ubicaciones={location_count}, posiciones={position_count}, almacenadas={stored_count}, despachadas={dispatched_count}, eventos={movement_count}, rechazados={rejected_count}"
+            "El conjunto generado no cumple los invariantes: unidades={unit_count}, ubicaciones={location_count}, posiciones={position_count}, productos={product_count}, líneas={line_count}, almacenadas={stored_count}, despachadas={dispatched_count}, eventos={movement_count}, intentos={attempt_count}"
         )
         .into());
     }
@@ -369,6 +483,7 @@ fn render_report(
     run_time_ms: u128,
     database_path: &std::path::Path,
     sqlite_version: &str,
+    runtime_metadata: &RuntimeMetadata,
     search_result_count: usize,
     history_entry_count: usize,
     mut measurements: [Measurement; 3],
@@ -377,20 +492,29 @@ fn render_report(
         "# ARD-21: medición local de capacidad y latencia\n\n\
          Fecha de ejecución Unix (ms): {run_time_ms}\n\
          Sistema: {} {}\n\
+         Hardware: {}\n\
+         Revisión Git: {}\n\
+         Compilador: {}\n\
          Paralelismo lógico disponible: {}\n\
          SQLite: {sqlite_version}\n\
          Rust crate: Ariadna {}\n\
-         Ruta de la base sintética: `{}`\n\n\
+         Base sintética: `{}`\n\n\
          Conjunto: {UNIT_COUNT} unidades ({} almacenadas y {} despachadas), {} ubicaciones ({} posiciones), {PRODUCT_COUNT} productos y {} eventos de movimiento aceptados. El generador usa una semilla fija implícita en los identificadores, cantidades, lotes y marcas de tiempo. Se registran {} muestras por operación después de {} calentamientos; p95 usa el rango de vecino más cercano.\n\
          La búsqueda fija `SKU-000` devuelve {search_result_count} coincidencias. El historial de `unit-000000` contiene {history_entry_count} registros. El movimiento alterna `unit-000250` entre `position-000` y `position-250`.\n\n\
          Las duraciones miden la llamada al caso de uso Rust y su repositorio SQLite, excluyendo interfaz, serialización IPC y renderizado. El resultado corresponde solo a este equipo y configuración local; no representa un SLA ni una medición de bodega real.\n\n\
-         | Operación | p50 (ms) | p95 (ms) | Muestras |\n\
-         | --- | ---: | ---: | ---: |\n",
+         | Operación | p50 (ms) | p95 (ms) | Meta p95 | Muestras |\n\
+         | --- | ---: | ---: | --- | ---: |\n",
         std::env::consts::OS,
         std::env::consts::ARCH,
+        runtime_metadata.hardware,
+        runtime_metadata.git_revision,
+        runtime_metadata.rustc_version,
         std::thread::available_parallelism().map_or(1, usize::from),
         env!("CARGO_PKG_VERSION"),
-        database_path.display(),
+        database_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
         STORED_UNIT_COUNT,
         UNIT_COUNT - STORED_UNIT_COUNT,
         POSITION_COUNT + 3,
@@ -404,8 +528,13 @@ fn render_report(
         let p50 = measurement.p50_ms();
         let p95 = measurement.p95_ms();
         report.push_str(&format!(
-            "| {} | {p50:.3} | {p95:.3} | {} |\n",
+            "| {} | {p50:.3} | {p95:.3} | {} | {} |\n",
             measurement.name,
+            if p95 <= TARGET_P95_MS {
+                "Cumple"
+            } else {
+                "No cumple"
+            },
             measurement.samples_micros.len()
         ));
     }
@@ -414,7 +543,14 @@ fn render_report(
 
 #[cfg(test)]
 mod tests {
-    use super::percentile_ms;
+    use std::{
+        fs::{self, OpenOptions},
+        io::{ErrorKind, Write},
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{percentile_ms, report_path_for_database, write_report_exclusive};
 
     #[test]
     fn percentile_uses_nearest_rank() {
@@ -424,5 +560,37 @@ mod tests {
 
         assert_eq!(percentile_ms(&mut samples, 50), 50.0);
         assert_eq!(percentile_ms(&mut samples, 95), 95.0);
+    }
+
+    #[test]
+    fn report_path_does_not_overwrite_a_database_with_markdown_extension() {
+        assert!(report_path_for_database(Path::new("benchmark.md")).is_err());
+        assert!(report_path_for_database(Path::new("benchmark.MD")).is_err());
+        assert_eq!(
+            report_path_for_database(Path::new("benchmark.sqlite3")).unwrap(),
+            Path::new("benchmark.md")
+        );
+    }
+
+    #[test]
+    fn report_writer_preserves_an_existing_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("ariadna-ard21-report-{unique}.md"));
+        let mut existing = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        existing.write_all(b"preservar").unwrap();
+        drop(existing);
+
+        let error = write_report_exclusive(&path, "reemplazar").unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "preservar");
+        fs::remove_file(path).unwrap();
     }
 }
