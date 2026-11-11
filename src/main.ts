@@ -1,12 +1,14 @@
 import "./views/warehouse-map-view";
+import { mountAlertsView } from "./views/alerts-view";
 import { mountLocationsView } from "./views/locations-view";
 import { mountOperationsView } from "./views/operations-view";
 import { mountProductsView } from "./views/products-view";
+import { mountSearchView } from "./views/search-view";
 import { mountUnitsView } from "./views/units-view";
 
 document.documentElement.dataset.app = "ariadna";
 
-type ViewName = "map" | "products" | "locations" | "units" | "operations";
+type ViewName = "map" | "products" | "locations" | "units" | "operations" | "search" | "alerts";
 
 const viewElements = new Map<ViewName, HTMLElement>([
   ["map", requiredElement<HTMLElement>("#view-map")],
@@ -14,12 +16,16 @@ const viewElements = new Map<ViewName, HTMLElement>([
   ["locations", requiredElement<HTMLElement>("#view-locations")],
   ["units", requiredElement<HTMLElement>("#view-units")],
   ["operations", requiredElement<HTMLElement>("#view-operations")],
+  ["search", requiredElement<HTMLElement>("#view-search")],
+  ["alerts", requiredElement<HTMLElement>("#view-alerts")],
 ]);
 const navButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-view-button]")];
 const productsView = mountProductsView();
 const locationsView = mountLocationsView();
 const unitsView = mountUnitsView();
 const operationsView = mountOperationsView();
+const searchView = mountSearchView();
+const alertsView = mountAlertsView();
 let activeView: ViewName = "map";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -41,6 +47,8 @@ async function activateView(viewName: ViewName): Promise<void> {
   if (viewName === "locations") await locationsView.refresh();
   if (viewName === "units") await unitsView.refresh();
   if (viewName === "operations") await operationsView.refresh();
+  if (viewName === "search") await searchView.refresh();
+  if (viewName === "alerts") await alertsView.refresh();
 }
 
 for (const button of navButtons) {
@@ -52,5 +60,18 @@ for (const button of navButtons) {
 
 window.addEventListener("ariadna:inventory-changed", () => {
   if (activeView === "units") void unitsView.refresh();
+  if (activeView === "search") void searchView.refresh();
+  if (activeView === "alerts") void alertsView.refresh();
+});
+
+window.addEventListener("ariadna:open-unit", (event: Event) => {
+  const detail = (event as CustomEvent<{ handlingUnitId: string; movementEventId?: string }>).detail;
+  if (!detail?.handlingUnitId) return;
+  void (async () => {
+    const activation = activateView("units");
+    requiredElement<HTMLElement>("#units-title").focus();
+    await activation;
+    await unitsView.openByIdentifier(detail.handlingUnitId, detail.movementEventId);
+  })();
 });
 

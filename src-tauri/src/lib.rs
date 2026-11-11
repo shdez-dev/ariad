@@ -22,6 +22,7 @@ pub fn run() {
             ipc::create_product,
             ipc::get_product,
             ipc::list_products,
+            ipc::search_inventory,
             ipc::update_product,
             ipc::deactivate_product,
             ipc::create_location,
@@ -37,6 +38,8 @@ pub fn run() {
             ipc::dispatch_unit,
             ipc::record_movement_correction,
             ipc::get_movement_history,
+            ipc::list_alerts,
+            ipc::mark_alert_reviewed,
         ])
         .setup(|app| {
             let config = AppConfig::from_data_directory(app.path().app_data_dir()?)?;

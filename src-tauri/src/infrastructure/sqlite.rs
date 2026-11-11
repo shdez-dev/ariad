@@ -9,10 +9,12 @@ use sqlx::{
 use thiserror::Error;
 
 use crate::{
-    application::{EventOutcome, InventoryRepository, MovementHistoryEntry, RepositoryError},
+    application::{
+        AlertEntry, EventOutcome, InventoryRepository, MovementHistoryEntry, RepositoryError,
+    },
     domain::{
-        HandlingUnit, HandlingUnitLine, HandlingUnitStatus, Location, LocationKind,
-        MovementCorrection, MovementEvent, MovementKind, Product, Sku,
+        Alert, AlertStatus, HandlingUnit, HandlingUnitLine, HandlingUnitStatus, Location,
+        LocationKind, MovementCorrection, MovementEvent, MovementKind, Product, Sku,
     },
 };
 
@@ -172,6 +174,22 @@ impl SqliteInventoryRepository {
             ));
         }
         Ok(units)
+    }
+
+    async fn query_alert_entries(
+        &self,
+        alert_id: Option<&str>,
+    ) -> Result<Vec<AlertEntry>, RepositoryError> {
+        let rows = sqlx::query_as::<_, AlertRow>(
+            "SELECT alert.id AS alert_id, alert.movement_event_id, alert.kind AS alert_kind, alert.status AS alert_status, alert.created_at_ms, event.handling_unit_id, unit.label AS handling_unit_label, event.kind AS event_kind, event.occurred_at_ms, origin.code AS origin_location_code, destination.code AS destination_location_code FROM alerts AS alert JOIN movement_events AS event ON event.event_id = alert.movement_event_id JOIN handling_units AS unit ON unit.id = event.handling_unit_id LEFT JOIN locations AS origin ON origin.id = event.origin_location_id LEFT JOIN locations AS destination ON destination.id = event.destination_location_id WHERE (? IS NULL OR alert.id = ?) ORDER BY CASE alert.status WHEN 'open' THEN 0 WHEN 'reviewed' THEN 1 ELSE 2 END, alert.created_at_ms DESC, alert.id",
+        )
+        .bind(alert_id)
+        .bind(alert_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(map_repository_error)?;
+
+        rows.into_iter().map(AlertEntry::try_from).collect()
     }
 }
 
@@ -795,6 +813,89 @@ impl InventoryRepository for SqliteInventoryRepository {
 
         Ok(rows.into_iter().map(Into::into).collect())
     }
+
+    async fn list_alerts(&self) -> Result<Vec<AlertEntry>, RepositoryError> {
+        self.query_alert_entries(None).await
+    }
+
+    async fn mark_alert_reviewed(&self, alert_id: &str) -> Result<AlertEntry, RepositoryError> {
+        let updated =
+            sqlx::query("UPDATE alerts SET status = 'reviewed' WHERE id = ? AND status = 'open'")
+                .bind(alert_id)
+                .execute(&self.pool)
+                .await
+                .map_err(map_repository_error)?;
+
+        let entry = self
+            .query_alert_entries(Some(alert_id))
+            .await?
+            .into_iter()
+            .next()
+            .ok_or(RepositoryError::NotFound)?;
+
+        if updated.rows_affected() == 0 {
+            match entry.alert.status {
+                AlertStatus::Reviewed => return Ok(entry),
+                AlertStatus::Resolved => return Err(RepositoryError::InvalidAlertTransition),
+                AlertStatus::Open => {
+                    return Err(RepositoryError::Storage(
+                        "la alerta no pudo actualizarse".to_owned(),
+                    ));
+                }
+            }
+        }
+
+        Ok(entry)
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct AlertRow {
+    alert_id: String,
+    movement_event_id: String,
+    alert_kind: String,
+    alert_status: String,
+    created_at_ms: i64,
+    handling_unit_id: String,
+    handling_unit_label: String,
+    event_kind: String,
+    occurred_at_ms: i64,
+    origin_location_code: Option<String>,
+    destination_location_code: Option<String>,
+}
+
+impl TryFrom<AlertRow> for AlertEntry {
+    type Error = RepositoryError;
+
+    fn try_from(row: AlertRow) -> Result<Self, Self::Error> {
+        let status = match row.alert_status.as_str() {
+            "open" => AlertStatus::Open,
+            "reviewed" => AlertStatus::Reviewed,
+            "resolved" => AlertStatus::Resolved,
+            other => {
+                return Err(RepositoryError::Storage(format!(
+                    "estado de alerta desconocido: {other}"
+                )));
+            }
+        };
+        let alert = Alert::from_persisted(
+            row.alert_id,
+            row.movement_event_id,
+            row.alert_kind,
+            row.created_at_ms,
+            status,
+        )
+        .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+        Ok(Self {
+            alert,
+            handling_unit_id: row.handling_unit_id,
+            handling_unit_label: row.handling_unit_label,
+            event_kind: row.event_kind,
+            occurred_at_ms: row.occurred_at_ms,
+            origin_location_code: row.origin_location_code,
+            destination_location_code: row.destination_location_code,
+        })
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -1054,10 +1155,11 @@ mod tests {
     use crate::application::{
         CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct, DispatchUnit,
         EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
-        InventoryRepository, ListHandlingUnits, ListLocations, ListProducts, MoveUnit, ReceiveLine,
-        ReceiveUnit, RecordCorrection, StoreUnit, UpdateLocation, UpdateProduct,
+        InventoryRepository, InventorySearchKind, ListAlerts, ListHandlingUnits, ListLocations,
+        ListProducts, MarkAlertReviewed, MoveUnit, ReceiveLine, ReceiveUnit, RecordCorrection,
+        SearchInventory, StoreUnit, UpdateLocation, UpdateProduct,
     };
-    use crate::domain::{MovementKind, Sku};
+    use crate::domain::{AlertStatus, MovementKind, Sku};
     use std::sync::Arc;
 
     async fn insert_location_tree(pool: &SqlitePool) {
@@ -3188,6 +3290,143 @@ mod tests {
 
         copied.close().await;
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn inventory_search_matches_products_units_and_locations_case_insensitively() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        insert_location_tree(database.pool()).await;
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        repository
+            .insert_product(&Product::new("SKU-SEARCH", "Caja azul", "unidad").unwrap())
+            .await
+            .unwrap();
+        let unit = HandlingUnit::new(
+            "unit-search",
+            "PALLET-SEARCH",
+            vec![HandlingUnitLine::new("SKU-SEARCH", 2, None::<&str>).unwrap()],
+        )
+        .unwrap();
+        repository
+            .receive_unit(
+                &unit,
+                &movement(
+                    "event-search-received",
+                    "unit-search",
+                    MovementKind::Received,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+        repository
+            .record_movement(&movement(
+                "event-search-stored",
+                "unit-search",
+                MovementKind::Stored,
+                None,
+                Some("position-1"),
+            ))
+            .await
+            .unwrap();
+
+        let search = SearchInventory::new(repository);
+        let by_sku = search.execute(" sku-search ").await.unwrap();
+        assert!(by_sku.iter().any(|result| {
+            result.kind == InventorySearchKind::Product && result.id == "SKU-SEARCH"
+        }));
+        assert!(by_sku.iter().any(|result| {
+            result.kind == InventorySearchKind::HandlingUnit && result.id == "unit-search"
+        }));
+
+        let by_label = search.execute("pallet-sea").await.unwrap();
+        assert_eq!(by_label.len(), 1);
+        assert_eq!(by_label[0].kind, InventorySearchKind::HandlingUnit);
+        assert_eq!(by_label[0].status, "stored");
+
+        let by_location = search.execute("p1").await.unwrap();
+        assert!(by_location.iter().any(|result| {
+            result.kind == InventorySearchKind::Location && result.id == "position-1"
+        }));
+        assert!(by_location.iter().any(|result| {
+            result.kind == InventorySearchKind::HandlingUnit && result.id == "unit-search"
+        }));
+        assert!(search.execute("   ").await.unwrap().is_empty());
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn alerts_list_their_movement_and_review_is_persisted_and_idempotent() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        repository
+            .insert_product(&Product::new("SKU-ALERT", "Caja", "unidad").unwrap())
+            .await
+            .unwrap();
+        let unit = HandlingUnit::new(
+            "unit-alert",
+            "PALLET-ALERT",
+            vec![HandlingUnitLine::new("SKU-ALERT", 1, None::<&str>).unwrap()],
+        )
+        .unwrap();
+        repository
+            .receive_unit(
+                &unit,
+                &movement(
+                    "event-alert",
+                    "unit-alert",
+                    MovementKind::Received,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO alerts (id, movement_event_id, kind, created_at_ms) VALUES ('alert-1', 'event-alert', 'revisión manual', 1800000000000)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        let listed = ListAlerts::new(repository.clone()).execute().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].alert.status, AlertStatus::Open);
+        assert_eq!(listed[0].handling_unit_id, "unit-alert");
+        assert_eq!(listed[0].handling_unit_label, "PALLET-ALERT");
+        assert_eq!(listed[0].alert.movement_event_id, "event-alert");
+
+        let review = MarkAlertReviewed::new(repository.clone());
+        let reviewed = review.execute(" alert-1 ").await.unwrap();
+        assert_eq!(reviewed.alert.status, AlertStatus::Reviewed);
+        let repeated = review.execute("alert-1").await.unwrap();
+        assert_eq!(repeated.alert.status, AlertStatus::Reviewed);
+        assert_eq!(
+            ListAlerts::new(repository.clone()).execute().await.unwrap()[0]
+                .alert
+                .status,
+            AlertStatus::Reviewed
+        );
+        assert!(matches!(
+            review.execute("missing-alert").await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::NotFound
+            ))
+        ));
+        sqlx::query(
+            "INSERT INTO alerts (id, movement_event_id, kind, status, created_at_ms) VALUES ('alert-resolved', 'event-alert', 'already_resolved', 'resolved', 1800000000001)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        assert!(matches!(
+            review.execute("alert-resolved").await,
+            Err(crate::application::ApplicationError::Repository(
+                RepositoryError::InvalidAlertTransition
+            ))
+        ));
+        database.close().await;
     }
 
     #[test]

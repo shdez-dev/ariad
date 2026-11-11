@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-10 proporciona 17 comandos IPC tipados; ARD-13 agrega `store_unit` para registrar la asignación inicial, con 18 comandos en total. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas. ARD-12 incorpora navegación, formularios de productos y ubicaciones, y consulta de unidades. ARD-13 está en curso con recepción, asignación, traslado y despacho desde la interfaz. La vista no infiere geometría ni usa hardware. La búsqueda transversal, la cronología completa y las alertas se completan en ARD-14.
+ARD-10 proporcionó 17 comandos IPC tipados; ARD-13 agregó `store_unit` para registrar la asignación inicial. ARD-14 añade la búsqueda transversal, la cronología visible de movimientos y la consulta/revisión de alertas persistidas, para un total de 21 comandos. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas. ARD-12 incorpora formularios de catálogo y consulta de unidades. ARD-13 cubre recepción, asignación, traslado y despacho. La interfaz no infiere geometría ni usa hardware. Las anomalías simuladas y su eventual generación de alertas corresponden a ARD-15.
 
 ## Requisitos del entorno
 
@@ -43,7 +43,7 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 - Rust estable y Tauri v2 para la aplicación de escritorio.
 - HTML, CSS y TypeScript empaquetados como recursos estáticos.
-- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y casos de uso para catálogo, ubicaciones, recepción, movimientos, despacho, consulta de unidades e historial.
+- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y casos de uso para catálogo, ubicaciones, recepción, movimientos, despacho, búsqueda, consulta de unidades, historial y revisión de alertas.
 - SQLx 0.9 y SQLite local ejecutan migraciones versionadas al iniciar la aplicación. La carpeta que entrega `app.path().app_data_dir()` contiene `ariadna.sqlite3` y `logs/ariadna.log`.
 - `src-tauri/src/ipc.rs` registra adaptadores delgados con Tauri v2. Usan DTO JSON `camelCase`, códigos de error estables y mensajes seguros; los detalles técnicos quedan en el log local.
 - `src/lib/ipc.ts` contiene las funciones tipadas `invoke` para el frontend. La fuente del evento la fija Rust; el frontend conserva el ID y la fecha UTC al reintentar la misma intención para respetar la idempotencia.
@@ -54,9 +54,9 @@ Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectur
 
 ## Trabajo siguiente
 
-1. Cerrar la aceptación visual de ARD-11 y ARD-12 en la ventana Tauri.
-2. Completar la verificación y publicar ARD-13 en GitHub.
-3. Implementar ARD-14 para búsqueda, historial cronológico y alertas.
+1. Completar revisión de código, verificación final y publicar ARD-14 en GitHub.
+2. Cerrar la aceptación visual manual de ARD-11 a ARD-14 en la ventana Tauri.
+3. Continuar con ARD-15, el simulador determinista de escenarios.
 
 ## Verificación local
 
@@ -69,5 +69,5 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; y ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`. ARD-13 se desarrolla en `feat/ard-13-operations` e incorpora el comando `store_unit`, además de recepción, asignación inicial, traslado, despacho y resumen del historial por IPC. Pasan `npm run build`, 3 pruebas de mapa, 4 pruebas de modelo de catálogo/operaciones, 43 pruebas Rust, formato, Clippy y `git diff --check`. La app Tauri inició con una configuración de smoke y un identificador de datos aislado (`com.ariadna.inventory.ard13smoke`). La inspección visual de ARD-11/12 y la aceptación manual de ARD-13 siguen pendientes.
+ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`. ARD-14 se implementa en `feat/ard-14-search-history-alerts`. La verificación en curso cubre búsqueda por SKU, etiqueta y ubicación, cronología completa y revisión idempotente de alertas. Las pruebas automatizadas no sustituyen la aceptación visual manual de las vistas Tauri.
 

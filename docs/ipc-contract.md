@@ -11,6 +11,8 @@ La interfaz llama a las funciones exportadas en `src/lib/ipc.ts`. Rust registra 
 - Los nombres JSON de argumentos y respuestas usan `camelCase`.
 - `LocationKind` usa las cadenas `zone`, `aisle`, `rack` o `position`.
 - `HandlingUnit.status` usa `received`, `stored` o `dispatched`.
+- Los resultados de `search_inventory` usan `product`, `handling_unit` o `location` y se calculan en Rust desde las listas persistidas.
+- Las alertas usan estado `open`, `reviewed` o `resolved`; `mark_alert_reviewed` cambia `open` a `reviewed` y repetirlo devuelve el estado ya persistido.
 - Los campos opcionales se devuelven como `null`.
 - La cantidad es un entero positivo.
 - Los tiempos del historial son milisegundos desde Unix UTC.
@@ -25,6 +27,7 @@ La interfaz llama a las funciones exportadas en `src/lib/ipc.ts`. Rust registra 
 | `create_product` | `sku`, `description`, `unitOfMeasure` | Producto creado y normalizado |
 | `get_product` | `sku` | Producto o `null` |
 | `list_products` | `includeInactive` | Lista de productos |
+| `search_inventory` | `query` | Coincidencias parciales de productos, unidades y ubicaciones activas |
 | `update_product` | `sku`, `description`, `unitOfMeasure` | Producto actualizado |
 | `deactivate_product` | `sku` | Producto desactivado |
 | `create_location` | `id`, `code`, `name`, `kind`, `parentId` | Ubicación creada |
@@ -40,20 +43,28 @@ La interfaz llama a las funciones exportadas en `src/lib/ipc.ts`. Rust registra 
 | `dispatch_unit` | `eventId`, `handlingUnitId`, `originLocationId`, `occurredAtMs` | `eventId` y resultado |
 | `record_movement_correction` | `correctionId`, `handlingUnitId`, `correctsEventId`, `reason`, `occurredAtMs` | `correctionId` y resultado |
 | `get_movement_history` | `handlingUnitId` | Cronología de eventos, intentos y correcciones |
+| `list_alerts` | Ninguno | Alertas con movimiento y unidad relacionados |
+| `mark_alert_reviewed` | `alertId` | Alerta con estado persistido tras la revisión |
 
-Las búsquedas combinadas por SKU, etiqueta y ubicación, las alertas y sus flujos visuales siguen en ARD-14. Este incremento incorpora la lectura de unidad por ID o etiqueta para que ARD-12 pueda mostrar detalles sin consultar SQLite desde TypeScript.
+`search_inventory` consulta el catálogo mediante repositorios SQLite y aplica una coincidencia parcial sin distinguir mayúsculas. El SKU puede devolver el producto y las unidades que contienen ese producto; los códigos/IDs de ubicación y etiquetas/IDs de unidad también se pueden buscar. La interfaz no filtra listas parciales ni consulta SQLite directamente.
+
+Las alertas de ARD-14 se leen de la tabla persistida existente y solo pueden apuntar a movimientos aceptados conforme a su clave foránea. ARD-14 no crea reglas de alertas ni escenarios simulados. La navegación de una alerta abre la unidad relacionada y enfoca el registro del movimiento en su cronología.
 
 ## Errores
 
 Cuando una operación falla, la promesa de `invoke` se rechaza con `{ code, message }`. `AriadnaIpcError` adapta ese rechazo para que la interfaz pueda mostrar el mensaje seguro y tomar decisiones por código. Los códigos estables incluyen `validation`, `conflict`, `not_found`, `event_id_conflict`, `inactive_product`, `invalid_transition`, `invalid_location_hierarchy`, `location_hierarchy_immutable`, `in_use`, `position_occupied`, `invalid_destination`, `correction_reference_mismatch`, `correction_before_original` y `storage`.
 
-Los detalles internos, como errores SQLite, se escriben en `logs/ariadna.log`; no se incluyen en los mensajes IPC. Una operación rechazada no confirma cambios parciales.
+Los códigos estables incluyen `invalid_alert_transition` además de los errores de validación, conflicto, referencias faltantes, transiciones, jerarquía, ocupación, corrección y almacenamiento. Los detalles internos, como errores SQLite, se escriben en `logs/ariadna.log`; no se incluyen en los mensajes IPC. Una operación rechazada no confirma cambios parciales.
 
 Después de crear, actualizar o desactivar una ubicación, y después de una recepción, asignación inicial, traslado o despacho confirmados, el wrapper emite el evento de ventana `ariadna:inventory-changed`. Las vistas que dependen de la jerarquía o la ocupación, como el mapa lógico de ARD-11, lo escuchan para volver a consultar ubicaciones y unidades persistidas. El evento no se emite si el comando falla. Los cambios de productos no modifican la ocupación ni requieren refrescar el mapa.
 
+Marcar una alerta como revisada no cambia el inventario y no emite `ariadna:inventory-changed`. La vista actualiza la tarjeta con la respuesta persistida del comando.
+
 ## Verificación
 
-- Pruebas Rust para búsqueda de unidades por ID o etiqueta, líneas, estado, orden y filtrado de despachadas.
+- Pruebas Rust para búsqueda parcial de productos, etiquetas/IDs de unidad y ubicaciones, además de búsqueda de SKU en las líneas de unidades.
+- Pruebas Rust para alertas relacionadas con movimientos, transición `open` a `reviewed`, idempotencia y referencia faltante.
+- La cronología existente cubre eventos aceptados, intentos duplicados/rechazados y correcciones en orden estable.
 - Pruebas de serialización de DTO, enums, nombres camelCase y forma estable de errores.
 - `npm run build` comprueba que los consumidores TypeScript usan el contrato sin tipos contradictorios.
 - `cargo test` y `cargo clippy --all-targets -- -D warnings` comprueban el puente y el núcleo Rust.

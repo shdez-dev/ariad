@@ -1,4 +1,10 @@
-import { AriadnaIpcError, inventoryIpc, type HandlingUnitDto, type LocationDto } from "../lib/ipc";
+import {
+  AriadnaIpcError,
+  inventoryIpc,
+  type HandlingUnitDto,
+  type LocationDto,
+  type MovementHistoryEntryDto,
+} from "../lib/ipc";
 import { getLocationPath } from "../lib/catalog-model";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -21,7 +27,37 @@ function unitStatusLabel(status: HandlingUnitDto["status"]): string {
   return labels[status];
 }
 
-export function mountUnitsView(): { refresh: () => Promise<void> } {
+function movementKindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    received: "Recepción",
+    stored: "Asignación de posición",
+    moved: "Traslado",
+    dispatched: "Despacho",
+    correction: "Corrección",
+  };
+  return labels[kind] ?? kind;
+}
+
+function movementResultLabel(result: string): string {
+  const labels: Record<string, string> = {
+    accepted: "Aceptado",
+    duplicate: "Duplicado",
+    rejected: "Rechazado",
+  };
+  return labels[result] ?? result;
+}
+
+function dateLabel(timestamp: number): string {
+  return new Intl.DateTimeFormat("es-CL", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+export function mountUnitsView(): {
+  refresh: () => Promise<void>;
+  openByIdentifier: (identifier: string, eventId?: string) => Promise<void>;
+} {
   const rows = requiredElement<HTMLTableSectionElement>("#units-table-body");
   const status = requiredElement<HTMLElement>("#units-status");
   const filter = requiredElement<HTMLInputElement>("#units-filter");
@@ -32,6 +68,7 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
   let units: HandlingUnitDto[] = [];
   let locations: LocationDto[] = [];
   let selectedUnitId: string | null = null;
+  let selectedEventId: string | null = null;
   let requestNumber = 0;
   let refreshRequestNumber = 0;
   let loadFailed = false;
@@ -119,7 +156,11 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
     }
   }
 
-  function renderDetail(unit: HandlingUnitDto, loading: boolean, error?: string): void {
+  function renderDetail(
+    unit: HandlingUnitDto,
+    history: MovementHistoryEntryDto[] | null,
+    historyError?: string,
+  ): void {
     detail.replaceChildren();
     const header = document.createElement("div");
     header.className = "detail-header";
@@ -128,6 +169,7 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
     kicker.textContent = "DETALLE DE UNIDAD";
     const title = document.createElement("h2");
     title.className = "detail-title";
+    title.tabIndex = -1;
     title.textContent = unit.label;
     const identity = document.createElement("p");
     identity.className = "detail-name";
@@ -161,17 +203,7 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
     linesTitle.className = "detail-section-title unit-lines-title";
     linesTitle.textContent = "Productos del pallet";
     detail.append(linesTitle);
-    if (loading) {
-      const loadingText = document.createElement("p");
-      loadingText.className = "detail-muted";
-      loadingText.textContent = "Consultando información actual…";
-      detail.append(loadingText);
-    } else if (error) {
-      const errorText = document.createElement("p");
-      errorText.className = "detail-warning";
-      errorText.textContent = error;
-      detail.append(errorText);
-    } else if (unit.lines.length === 0) {
+    if (unit.lines.length === 0) {
       const empty = document.createElement("p");
       empty.className = "detail-muted";
       empty.textContent = "Esta unidad no contiene líneas de producto.";
@@ -199,32 +231,151 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
       }
       detail.append(list);
     }
+
+    const historyTitle = document.createElement("h3");
+    historyTitle.className = "detail-section-title movement-history-title";
+    historyTitle.textContent = "Cronología de movimientos";
+    detail.append(historyTitle);
+    if (history === null) {
+      const loadingText = document.createElement("p");
+      loadingText.className = "detail-muted";
+      loadingText.textContent = "Consultando historial persistido…";
+      detail.append(loadingText);
+    } else if (historyError) {
+      const errorText = document.createElement("p");
+      errorText.className = "detail-warning";
+      errorText.textContent = historyError;
+      detail.append(errorText);
+    } else if (history.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "detail-muted";
+      empty.textContent = "Esta unidad aún no tiene movimientos registrados.";
+      detail.append(empty);
+    } else {
+      const timeline = document.createElement("ol");
+      timeline.className = "movement-history-list";
+      for (const entry of history) {
+        const item = document.createElement("li");
+        item.className = "movement-history-entry";
+        item.dataset.historyEventId = entry.eventId;
+        item.dataset.historyRecordId = entry.recordId;
+        item.tabIndex = -1;
+
+        const header = document.createElement("div");
+        header.className = "movement-history-heading";
+        const kind = document.createElement("strong");
+        kind.textContent = movementKindLabel(entry.kind);
+        const outcome = document.createElement("span");
+        outcome.className = `record-badge history-result-${entry.result}`;
+        outcome.textContent = movementResultLabel(entry.result);
+        header.append(kind, outcome);
+
+        const date = document.createElement("p");
+        date.className = "detail-muted";
+        date.textContent = `Ocurrido ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
+        item.append(header, date);
+
+        const movementLocations = document.createElement("p");
+        movementLocations.className = "movement-history-locations";
+        const origin = entry.originLocationId
+          ? locations.find((location) => location.id === entry.originLocationId)
+          : undefined;
+        const destination = entry.destinationLocationId
+          ? locations.find((location) => location.id === entry.destinationLocationId)
+          : undefined;
+        movementLocations.textContent = entry.originLocationId || entry.destinationLocationId
+          ? `${origin ? getLocationPath(origin, locations) : entry.originLocationId ?? "Origen sin ubicación"} → ${destination ? getLocationPath(destination, locations) : entry.destinationLocationId ?? "Sin destino"}`
+          : "Sin cambio de ubicación";
+        item.append(movementLocations);
+
+        if (entry.rejectionReason) {
+          const reason = document.createElement("p");
+          reason.className = "detail-warning history-reason";
+          reason.textContent = `Motivo: ${entry.rejectionReason}`;
+          item.append(reason);
+        }
+        if (entry.correctsEventId || entry.correctionReason) {
+          const correction = document.createElement("p");
+          correction.className = "detail-note history-correction";
+          correction.textContent = `Corrige ${entry.correctsEventId ?? "un evento"}${entry.correctionReason ? ` · ${entry.correctionReason}` : ""}`;
+          item.append(correction);
+        }
+        const source = document.createElement("p");
+        source.className = "movement-history-source";
+        source.textContent = `Evento ${entry.eventId} · ${entry.source}`;
+        item.append(source);
+        timeline.append(item);
+      }
+      detail.append(timeline);
+    }
   }
 
-  async function openDetails(unit: HandlingUnitDto): Promise<void> {
+  async function openDetails(
+    unit: HandlingUnitDto,
+    focusEventId?: string,
+    transferFocus = false,
+  ): Promise<void> {
     selectedUnitId = unit.id;
+    selectedEventId = focusEventId ?? null;
     const currentRequest = ++requestNumber;
-    renderDetail(unit, true);
+    renderDetail(unit, null);
     detailAnnouncement.textContent = `Consultando detalle del pallet ${unit.label}.`;
+    const [latestResult, historyResult] = await Promise.allSettled([
+      inventoryIpc.getHandlingUnit(unit.id),
+      inventoryIpc.getMovementHistory(unit.id),
+    ]);
+    if (currentRequest !== requestNumber || selectedUnitId !== unit.id) return;
+    if (latestResult.status === "fulfilled" && !latestResult.value) {
+      detail.replaceChildren();
+      const notFound = document.createElement("p");
+      notFound.className = "detail-warning";
+      notFound.textContent = `No se encontró la unidad ${unit.label}. Actualiza la lista.`;
+      detail.append(notFound);
+      setStatus(`No se encontró la unidad ${unit.label}. Actualiza la lista.`, "error");
+      detailAnnouncement.textContent = `No se encontró el pallet ${unit.label}.`;
+      return;
+    }
+    const latest = latestResult.status === "fulfilled" ? latestResult.value ?? unit : unit;
+    const movementHistory = historyResult.status === "fulfilled" ? historyResult.value : null;
+    const historyError = historyResult.status === "rejected" ? messageFor(historyResult.reason) : undefined;
+    renderDetail(latest, movementHistory, historyError);
+    if (latestResult.status === "rejected") {
+      setStatus(messageFor(latestResult.reason), "error");
+      detailAnnouncement.textContent = `No se pudo actualizar el detalle del pallet ${unit.label}.`;
+    } else if (historyError) {
+      setStatus(`No se pudo cargar la cronología: ${historyError}`, "error");
+      detailAnnouncement.textContent = `Detalle del pallet ${latest.label} cargado, pero falló el historial.`;
+    } else {
+      setStatus(`Detalle y cronología de ${latest.label} cargados.`);
+      detailAnnouncement.textContent = `Detalle e historial del pallet ${latest.label} cargados.`;
+    }
+    if (transferFocus) {
+      const eventTarget = focusEventId && movementHistory
+        ? [...detail.querySelectorAll<HTMLElement>("[data-history-event-id]")]
+        .find((item) => item.dataset.historyEventId === focusEventId
+          || item.dataset.historyRecordId === focusEventId)
+        : undefined;
+      if (focusEventId && movementHistory && !eventTarget) {
+        setStatus(`El evento ${focusEventId} no aparece en la cronología actual.`, "error");
+      }
+      const focusTarget = eventTarget ?? detail.querySelector<HTMLElement>(".detail-title");
+      focusTarget?.focus();
+      eventTarget?.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  async function openByIdentifier(identifier: string, eventId?: string): Promise<void> {
     try {
-      const latest = await inventoryIpc.getHandlingUnit(unit.id);
-      if (currentRequest !== requestNumber || selectedUnitId !== unit.id) return;
-      if (!latest) {
-        detail.replaceChildren();
-        const notFound = document.createElement("p");
-        notFound.className = "detail-warning";
-        notFound.textContent = `No se encontró la unidad ${unit.label}. Actualiza la lista.`;
-        detail.append(notFound);
-        setStatus(`No se encontró la unidad ${unit.label}. Actualiza la lista.`, "error");
-        detailAnnouncement.textContent = `No se encontró el pallet ${unit.label}.`;
+      const unit = await inventoryIpc.getHandlingUnit(identifier);
+      if (!unit) {
+        setStatus(`No se encontró la unidad ${identifier}. Actualiza la consulta.`, "error");
         return;
       }
-      renderDetail(latest, false);
-      detailAnnouncement.textContent = `Detalle del pallet ${latest.label} cargado.`;
+      if (!units.some((item) => item.id === unit.id)) units.push(unit);
+      renderRows();
+      await openDetails(unit, eventId, true);
     } catch (error: unknown) {
-      if (currentRequest !== requestNumber || selectedUnitId !== unit.id) return;
-      renderDetail(unit, false, messageFor(error));
-      detailAnnouncement.textContent = `No se pudo cargar el detalle del pallet ${unit.label}.`;
+      setStatus(messageFor(error), "error");
     }
   }
 
@@ -245,7 +396,7 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
       renderRows();
       setStatus(`${units.length} ${units.length === 1 ? "unidad cargada" : "unidades cargadas"}.`);
       const selected = selectedUnitId ? units.find((item) => item.id === selectedUnitId) : undefined;
-      if (selected) await openDetails(selected);
+      if (selected) await openDetails(selected, selectedEventId ?? undefined);
       else if (selectedUnitId) {
         selectedUnitId = null;
         detail.replaceChildren();
@@ -267,6 +418,6 @@ export function mountUnitsView(): { refresh: () => Promise<void> } {
 
   filter.addEventListener("input", renderRows);
   refreshButton.addEventListener("click", () => void refresh());
-  return { refresh };
+  return { refresh, openByIdentifier };
 }
 

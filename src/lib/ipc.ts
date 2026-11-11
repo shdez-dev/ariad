@@ -60,6 +60,28 @@ export type MovementHistoryEntryDto = {
   correctionReason: string | null;
 };
 
+export type InventorySearchResultDto = {
+  kind: "product" | "handling_unit" | "location";
+  id: string;
+  title: string;
+  subtitle: string;
+  status: string;
+};
+
+export type AlertDto = {
+  id: string;
+  movementEventId: string;
+  kind: string;
+  status: "open" | "reviewed" | "resolved";
+  createdAtMs: number;
+  handlingUnitId: string;
+  handlingUnitLabel: string;
+  eventKind: string;
+  occurredAtMs: number;
+  originLocationCode: string | null;
+  destinationLocationCode: string | null;
+};
+
 export type IpcErrorCode =
   | "validation"
   | "conflict"
@@ -74,6 +96,7 @@ export type IpcErrorCode =
   | "invalid_destination"
   | "correction_reference_mismatch"
   | "correction_before_original"
+  | "invalid_alert_transition"
   | "storage";
 
 type IpcErrorPayload = {
@@ -138,6 +161,8 @@ export const inventoryIpc = {
   getProduct: (sku: string) => call<ProductDto | null>("get_product", { sku }),
   listProducts: (includeInactive = false) =>
     call<ProductDto[]>("list_products", { includeInactive }),
+  searchInventory: (query: string) =>
+    call<InventorySearchResultDto[]>("search_inventory", { query }),
   updateProduct: (input: Omit<ProductDto, "active">) =>
     call<ProductDto>("update_product", input),
   deactivateProduct: (sku: string) =>
@@ -197,4 +222,7 @@ export const inventoryIpc = {
   }) => call<CorrectionWriteDto>("record_movement_correction", input),
   getMovementHistory: (handlingUnitId: string) =>
     call<MovementHistoryEntryDto[]>("get_movement_history", { handlingUnitId }),
+  listAlerts: () => call<AlertDto[]>("list_alerts"),
+  markAlertReviewed: (alertId: string) =>
+    call<AlertDto>("mark_alert_reviewed", { alertId }),
 };

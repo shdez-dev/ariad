@@ -24,6 +24,8 @@
         <button class="nav-button" type="button" data-view-button="locations" aria-pressed="false">Ubicaciones</button>
         <button class="nav-button" type="button" data-view-button="units" aria-pressed="false">Unidades</button>
         <button class="nav-button" type="button" data-view-button="operations" aria-pressed="false">Movimientos</button>
+        <button class="nav-button" type="button" data-view-button="search" aria-pressed="false">Buscar</button>
+        <button class="nav-button" type="button" data-view-button="alerts" aria-pressed="false">Alertas</button>
       </nav>
       <div class="topbar-meta">
         <span class="environment-badge"><span class="status-dot" aria-hidden="true"></span>Datos locales</span>
@@ -171,7 +173,7 @@
         <div class="module-heading">
           <div>
             <p class="eyebrow"><span class="eyebrow-mark">04</span> INVENTARIO</p>
-            <h1 id="units-title">Unidades de manipulación</h1>
+            <h1 id="units-title" tabindex="-1">Unidades de manipulación</h1>
             <p class="intro-copy">Consulta pallets, su ubicación registrada y las líneas de producto asociadas.</p>
           </div>
           <button class="secondary-button" id="units-refresh" type="button">Actualizar unidades</button>
@@ -289,9 +291,49 @@
             <p class="module-status" id="operation-result-status">Aquí aparecerá el resultado confirmado por Rust.</p>
             <button class="secondary-button operation-retry" id="operation-retry" type="button" hidden>Verificar / reintentar la misma operación</button>
             <dl class="detail-list" id="operation-history-details" hidden></dl>
-            <p class="detail-muted" id="operation-history-note">El resumen se consulta por IPC después de confirmar. La cronología completa se añadirá en la vista de historial.</p>
+            <p class="detail-muted" id="operation-history-note">El resumen se consulta por IPC después de confirmar. La cronología completa está disponible en el detalle de cada unidad.</p>
           </aside>
         </div>
+      </section>
+
+      <section class="app-view" id="view-search" aria-labelledby="search-title" hidden>
+        <div class="module-heading">
+          <div>
+            <p class="eyebrow"><span class="eyebrow-mark">06</span> CONSULTA TRANSVERSAL</p>
+            <h1 id="search-title">Buscar inventario</h1>
+            <p class="intro-copy">Busca productos por SKU, pallets por etiqueta y ubicaciones por código o nombre.</p>
+          </div>
+        </div>
+        <div class="module-toolbar">
+          <label class="search-field" for="inventory-search-input">
+            <span aria-hidden="true">⌕</span>
+            <input id="inventory-search-input" type="search" maxlength="120" placeholder="SKU, etiqueta, código o nombre" autocomplete="off" />
+          </label>
+          <button class="secondary-button" id="inventory-search-clear" type="button">Limpiar</button>
+        </div>
+        <p class="module-status" id="inventory-search-status" role="status" aria-live="polite">Escribe un término para consultar los datos locales.</p>
+        <div class="search-layout">
+          <section class="search-results-panel" aria-labelledby="search-results-title">
+            <div class="panel-heading"><div><p class="section-kicker">COINCIDENCIAS</p><h2 id="search-results-title">Resultados</h2></div></div>
+            <div class="search-results" id="inventory-search-results"></div>
+          </section>
+          <aside class="detail-panel search-detail-panel" id="inventory-search-detail" aria-label="Detalle del resultado de búsqueda">
+            <div class="selection-empty"><span class="selection-mark" aria-hidden="true">⌕</span><p class="detail-kicker">DETALLE</p><h2 class="detail-title">Selecciona un resultado</h2><p class="detail-muted">Los datos se consultan desde SQLite mediante IPC.</p></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="app-view" id="view-alerts" aria-labelledby="alerts-title" hidden>
+        <div class="module-heading">
+          <div>
+            <p class="eyebrow"><span class="eyebrow-mark">07</span> REVISIÓN OPERATIVA</p>
+            <h1 id="alerts-title">Alertas</h1>
+            <p class="intro-copy">Revisa alertas persistidas y abre el movimiento asociado en la cronología de su unidad.</p>
+          </div>
+          <button class="secondary-button" id="alerts-refresh" type="button">Actualizar alertas</button>
+        </div>
+        <p class="module-status" id="alerts-status" role="status" aria-live="polite">Consultando alertas locales…</p>
+        <div class="alert-list" id="alerts-list" aria-label="Alertas persistidas"></div>
       </section>
 
       <footer class="app-footer">

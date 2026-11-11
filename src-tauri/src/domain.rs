@@ -425,6 +425,16 @@ pub enum AlertStatus {
     Resolved,
 }
 
+impl AlertStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Reviewed => "reviewed",
+            Self::Resolved => "resolved",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alert {
     pub id: String,
@@ -441,6 +451,22 @@ impl Alert {
         kind: impl AsRef<str>,
         created_at_ms: i64,
     ) -> Result<Self, DomainError> {
+        Self::from_persisted(
+            id,
+            movement_event_id,
+            kind,
+            created_at_ms,
+            AlertStatus::Open,
+        )
+    }
+
+    pub fn from_persisted(
+        id: impl AsRef<str>,
+        movement_event_id: impl AsRef<str>,
+        kind: impl AsRef<str>,
+        created_at_ms: i64,
+        status: AlertStatus,
+    ) -> Result<Self, DomainError> {
         if created_at_ms <= 0 {
             return Err(DomainError::InvalidTimestamp);
         }
@@ -449,7 +475,7 @@ impl Alert {
             movement_event_id: required(movement_event_id.as_ref(), "evento relacionado")?,
             kind: required(kind.as_ref(), "tipo de alerta")?,
             created_at_ms,
-            status: AlertStatus::Open,
+            status,
         })
     }
 }

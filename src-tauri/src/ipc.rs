@@ -3,13 +3,15 @@ use tauri::State;
 
 use crate::{
     application::{
-        ApplicationError, CreateLocation, CreateProduct, DeactivateLocation, DeactivateProduct,
-        DispatchUnit, EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
-        ListHandlingUnits, ListLocations, ListProducts, MoveUnit, ReceiveLine, ReceiveUnit,
-        RecordCorrection, StoreUnit, UpdateLocation, UpdateProduct, map_error_for_ui,
+        AlertEntry, ApplicationError, CreateLocation, CreateProduct, DeactivateLocation,
+        DeactivateProduct, DispatchUnit, EventOutcome, GetHandlingUnit, GetLocation,
+        GetMovementHistory, GetProduct, InventorySearchKind, InventorySearchResult, ListAlerts,
+        ListHandlingUnits, ListLocations, ListProducts, MarkAlertReviewed, MoveUnit, ReceiveLine,
+        ReceiveUnit, RecordCorrection, SearchInventory, StoreUnit, UpdateLocation, UpdateProduct,
+        map_error_for_ui,
     },
     diagnostic_log::DiagnosticLog,
-    domain::{DomainError, HandlingUnit, Location, LocationKind, Product},
+    domain::{AlertStatus, DomainError, HandlingUnit, Location, LocationKind, Product},
     state::AppState,
 };
 
@@ -186,6 +188,92 @@ pub struct MovementHistoryResponse {
     pub correction_reason: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InventorySearchKindResponse {
+    Product,
+    HandlingUnit,
+    Location,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InventorySearchResponse {
+    pub kind: InventorySearchKindResponse,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub status: String,
+}
+
+impl From<InventorySearchResult> for InventorySearchResponse {
+    fn from(value: InventorySearchResult) -> Self {
+        Self {
+            kind: match value.kind {
+                InventorySearchKind::Product => InventorySearchKindResponse::Product,
+                InventorySearchKind::HandlingUnit => InventorySearchKindResponse::HandlingUnit,
+                InventorySearchKind::Location => InventorySearchKindResponse::Location,
+            },
+            id: value.id,
+            title: value.title,
+            subtitle: value.subtitle,
+            status: value.status,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertStatusResponse {
+    Open,
+    Reviewed,
+    Resolved,
+}
+
+impl From<AlertStatus> for AlertStatusResponse {
+    fn from(value: AlertStatus) -> Self {
+        match value {
+            AlertStatus::Open => Self::Open,
+            AlertStatus::Reviewed => Self::Reviewed,
+            AlertStatus::Resolved => Self::Resolved,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AlertResponse {
+    pub id: String,
+    pub movement_event_id: String,
+    pub kind: String,
+    pub status: AlertStatusResponse,
+    pub created_at_ms: i64,
+    pub handling_unit_id: String,
+    pub handling_unit_label: String,
+    pub event_kind: String,
+    pub occurred_at_ms: i64,
+    pub origin_location_code: Option<String>,
+    pub destination_location_code: Option<String>,
+}
+
+impl From<AlertEntry> for AlertResponse {
+    fn from(value: AlertEntry) -> Self {
+        Self {
+            id: value.alert.id,
+            movement_event_id: value.alert.movement_event_id,
+            kind: value.alert.kind,
+            status: value.alert.status.into(),
+            created_at_ms: value.alert.created_at_ms,
+            handling_unit_id: value.handling_unit_id,
+            handling_unit_label: value.handling_unit_label,
+            event_kind: value.event_kind,
+            occurred_at_ms: value.occurred_at_ms,
+            origin_location_code: value.origin_location_code,
+            destination_location_code: value.destination_location_code,
+        }
+    }
+}
+
 impl From<crate::application::MovementHistoryEntry> for MovementHistoryResponse {
     fn from(value: crate::application::MovementHistoryEntry) -> Self {
         Self {
@@ -222,6 +310,7 @@ pub enum IpcErrorCode {
     InvalidDestination,
     CorrectionReferenceMismatch,
     CorrectionBeforeOriginal,
+    InvalidAlertTransition,
     Storage,
 }
 
@@ -278,6 +367,9 @@ impl IpcError {
                 crate::application::RepositoryError::CorrectionBeforeOriginal => {
                     IpcErrorCode::CorrectionBeforeOriginal
                 }
+                crate::application::RepositoryError::InvalidAlertTransition => {
+                    IpcErrorCode::InvalidAlertTransition
+                }
                 crate::application::RepositoryError::Storage(_) => IpcErrorCode::Storage,
             },
         };
@@ -333,6 +425,20 @@ pub async fn list_products(
         use_case.execute(include_inactive).await,
     )
     .map(|products| products.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn search_inventory(
+    state: State<'_, AppState>,
+    query: String,
+) -> Result<Vec<InventorySearchResponse>, IpcError> {
+    let use_case = SearchInventory::new(state.inventory_repository.clone());
+    expose(
+        &state,
+        "ipc.inventory.search",
+        use_case.execute(&query).await,
+    )
+    .map(|results| results.into_iter().map(Into::into).collect())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -618,6 +724,27 @@ pub async fn get_movement_history(
     .map(|entries| entries.into_iter().map(Into::into).collect())
 }
 
+#[tauri::command]
+pub async fn list_alerts(state: State<'_, AppState>) -> Result<Vec<AlertResponse>, IpcError> {
+    let use_case = ListAlerts::new(state.inventory_repository.clone());
+    expose(&state, "ipc.alert.list", use_case.execute().await)
+        .map(|alerts| alerts.into_iter().map(Into::into).collect())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn mark_alert_reviewed(
+    state: State<'_, AppState>,
+    alert_id: String,
+) -> Result<AlertResponse, IpcError> {
+    let use_case = MarkAlertReviewed::new(state.inventory_repository.clone());
+    expose(
+        &state,
+        "ipc.alert.review",
+        use_case.execute(&alert_id).await,
+    )
+    .map(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,6 +773,37 @@ mod tests {
         .unwrap();
         assert_eq!(correction["correctionId"], "correction-1");
         assert_eq!(correction["outcome"], "applied");
+
+        let search = InventorySearchResponse::from(InventorySearchResult {
+            kind: InventorySearchKind::HandlingUnit,
+            id: "unit-1".to_owned(),
+            title: "PALLET-1".to_owned(),
+            subtitle: "P1 · SKU-1".to_owned(),
+            status: "stored".to_owned(),
+        });
+        let search_json = serde_json::to_value(search).unwrap();
+        assert_eq!(search_json["kind"], "handling_unit");
+        assert_eq!(search_json["title"], "PALLET-1");
+
+        let alert = AlertResponse::from(AlertEntry {
+            alert: crate::domain::Alert::new(
+                "alert-1",
+                "event-1",
+                "manual_review",
+                1_800_000_000_000,
+            )
+            .unwrap(),
+            handling_unit_id: "unit-1".to_owned(),
+            handling_unit_label: "PALLET-1".to_owned(),
+            event_kind: "received".to_owned(),
+            occurred_at_ms: 1_800_000_000_010,
+            origin_location_code: None,
+            destination_location_code: None,
+        });
+        let alert_json = serde_json::to_value(alert).unwrap();
+        assert_eq!(alert_json["movementEventId"], "event-1");
+        assert_eq!(alert_json["handlingUnitLabel"], "PALLET-1");
+        assert_eq!(alert_json["status"], "open");
     }
 
     #[test]
@@ -721,6 +879,17 @@ mod tests {
         assert_eq!(serialized["message"], result.message);
         let contents = std::fs::read_to_string(directory.join("ariadna.log")).unwrap();
         assert!(contents.contains("sqlite secret detail"));
+
+        let transition_error = ApplicationError::Repository(
+            crate::application::RepositoryError::InvalidAlertTransition,
+        );
+        let transition =
+            IpcError::from_application_error(&log, "ipc.alert.review", &transition_error);
+        assert_eq!(transition.code, IpcErrorCode::InvalidAlertTransition);
+        assert_eq!(
+            serde_json::to_value(transition).unwrap()["code"],
+            "invalid_alert_transition"
+        );
         drop(log);
         std::fs::remove_dir_all(directory).unwrap();
     }

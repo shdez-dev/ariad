@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::domain::{
-    DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementCorrection,
+    Alert, DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementCorrection,
     MovementEvent, MovementKind, Product, Sku,
 };
 
@@ -34,6 +34,8 @@ pub enum RepositoryError {
     CorrectionReferenceMismatch,
     #[error("la corrección no puede tener una fecha anterior al evento original")]
     CorrectionBeforeOriginal,
+    #[error("la alerta no admite el cambio solicitado")]
+    InvalidAlertTransition,
     #[error("error de persistencia: {0}")]
     Storage(String),
 }
@@ -59,6 +61,33 @@ pub struct MovementHistoryEntry {
     pub rejection_reason: Option<String>,
     pub corrects_event_id: Option<String>,
     pub correction_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InventorySearchKind {
+    Product,
+    HandlingUnit,
+    Location,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventorySearchResult {
+    pub kind: InventorySearchKind,
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AlertEntry {
+    pub alert: Alert,
+    pub handling_unit_id: String,
+    pub handling_unit_label: String,
+    pub event_kind: String,
+    pub occurred_at_ms: i64,
+    pub origin_location_code: Option<String>,
+    pub destination_location_code: Option<String>,
 }
 
 #[async_trait]
@@ -114,6 +143,10 @@ pub trait InventoryRepository: Send + Sync {
         &self,
         handling_unit_id: &str,
     ) -> Result<Vec<MovementHistoryEntry>, RepositoryError>;
+
+    async fn list_alerts(&self) -> Result<Vec<AlertEntry>, RepositoryError>;
+
+    async fn mark_alert_reviewed(&self, alert_id: &str) -> Result<AlertEntry, RepositoryError>;
 }
 
 #[derive(Debug, Error)]
@@ -184,6 +217,9 @@ impl ApplicationError {
             }
             Self::Repository(RepositoryError::CorrectionBeforeOriginal) => {
                 "La fecha de la corrección debe ser igual o posterior al evento original."
+            }
+            Self::Repository(RepositoryError::InvalidAlertTransition) => {
+                "La alerta ya está resuelta y no se puede marcar como revisada."
             }
             Self::Repository(RepositoryError::Storage(_)) => {
                 "No se pudo completar la operación. No se confirmaron cambios."
@@ -627,6 +663,144 @@ pub struct GetMovementHistory {
     repository: Arc<dyn InventoryRepository>,
 }
 
+pub struct SearchInventory {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl SearchInventory {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        query: &str,
+    ) -> Result<Vec<InventorySearchResult>, ApplicationError> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let products = self.repository.list_products(false).await?;
+        let units = self.repository.list_handling_units(true).await?;
+        let locations = self.repository.list_locations(false).await?;
+        let mut results = Vec::new();
+
+        for product in products {
+            if contains_term(
+                &query,
+                [
+                    product.sku.as_str(),
+                    product.description.as_str(),
+                    product.unit_of_measure.as_str(),
+                ],
+            ) {
+                results.push(InventorySearchResult {
+                    kind: InventorySearchKind::Product,
+                    id: product.sku.as_str().to_owned(),
+                    title: product.sku.as_str().to_owned(),
+                    subtitle: format!("{} · {}", product.description, product.unit_of_measure),
+                    status: "active".to_owned(),
+                });
+            }
+        }
+
+        for unit in units {
+            let location = unit
+                .current_location_id
+                .as_deref()
+                .and_then(|id| locations.iter().find(|location| location.id == id));
+            let line_matches: Vec<&str> = unit.lines.iter().map(|line| line.sku.as_str()).collect();
+            let mut searchable = vec![unit.id.as_str(), unit.label.as_str()];
+            if let Some(location_id) = unit.current_location_id.as_deref() {
+                searchable.push(location_id);
+            }
+            if let Some(location) = location {
+                searchable.push(location.code.as_str());
+                searchable.push(location.name.as_str());
+            }
+            searchable.extend(line_matches);
+            if contains_term(&query, searchable) {
+                let location_text = location
+                    .map(|location| format!("{} · {}", location.code, location.name))
+                    .unwrap_or_else(|| "Sin ubicación".to_owned());
+                let skus = unit
+                    .lines
+                    .iter()
+                    .map(|line| line.sku.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                results.push(InventorySearchResult {
+                    kind: InventorySearchKind::HandlingUnit,
+                    id: unit.id,
+                    title: unit.label,
+                    subtitle: format!("{} · {}", location_text, skus),
+                    status: unit.status.as_str().to_owned(),
+                });
+            }
+        }
+
+        for location in locations {
+            if contains_term(
+                &query,
+                [
+                    location.id.as_str(),
+                    location.code.as_str(),
+                    location.name.as_str(),
+                ],
+            ) {
+                results.push(InventorySearchResult {
+                    kind: InventorySearchKind::Location,
+                    id: location.id,
+                    title: location.code,
+                    subtitle: format!("{} · {}", location.name, location.kind.as_str()),
+                    status: "active".to_owned(),
+                });
+            }
+        }
+
+        Ok(results)
+    }
+}
+
+fn contains_term<'a>(query: &str, values: impl IntoIterator<Item = &'a str>) -> bool {
+    values
+        .into_iter()
+        .any(|value| value.to_lowercase().contains(query))
+}
+
+pub struct ListAlerts {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl ListAlerts {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self) -> Result<Vec<AlertEntry>, ApplicationError> {
+        Ok(self.repository.list_alerts().await?)
+    }
+}
+
+pub struct MarkAlertReviewed {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+impl MarkAlertReviewed {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(&self, alert_id: &str) -> Result<AlertEntry, ApplicationError> {
+        let alert_id = alert_id.trim();
+        if alert_id.is_empty() {
+            return Err(DomainError::EmptyField("identificador de alerta").into());
+        }
+        Ok(self.repository.mark_alert_reviewed(alert_id).await?)
+    }
+}
+
 impl GetMovementHistory {
     pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
         Self { repository }
@@ -760,6 +934,17 @@ mod tests {
             _handling_unit_id: &str,
         ) -> Result<Vec<MovementHistoryEntry>, RepositoryError> {
             Ok(Vec::new())
+        }
+
+        async fn list_alerts(&self) -> Result<Vec<AlertEntry>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn mark_alert_reviewed(
+            &self,
+            _alert_id: &str,
+        ) -> Result<AlertEntry, RepositoryError> {
+            Err(RepositoryError::NotFound)
         }
     }
 
