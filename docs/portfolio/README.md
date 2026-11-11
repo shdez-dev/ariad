@@ -99,7 +99,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
 En la revisión base de la demostración, el commit [`8b99a96c7b945495caba3e292f20291d8171db09`](https://github.com/shdez-dev/ariad/commit/8b99a96c7b945495caba3e292f20291d8171db09) pasó el workflow [CI / Windows 43100633823](https://github.com/shdez-dev/ariad/actions/runs/43100633823), que publicó el artefacto NSIS `ariadna-windows-nsis-8b99a96c7b945495caba3e292f20291d8171db09`. Las capturas de esta guía se generaron sobre esa revisión con perfil aislado y datos sintéticos. Los artefactos de CI tienen retención temporal; verifica disponibilidad y hash en la ejecución antes de reutilizar el instalador.
 
-La verificación local de los cambios de guía y compatibilidad de migraciones pasa `npm run build`, las cinco suites frontend (16 pruebas), `cargo fmt --check`, `cargo test` (75 pruebas) y `cargo clippy --all-targets -- -D warnings`. La compilación del instalador y el resultado CI del siguiente commit se añadirán al registro cuando termine su ejecución.
+La verificación local de los cambios de guía y compatibilidad de migraciones pasa `npm run build`, las cinco suites frontend (16 pruebas), `cargo fmt --check`, `cargo test` (76 pruebas) y `cargo clippy --all-targets -- -D warnings`. El primer commit con estos cambios, `f28c8a9`, tuvo un fallo de CI en `Test Rust` porque el runner Windows transformó los finales de línea de las migraciones; el commit correctivo fija LF y cubre los checksums CRLF históricos. El resultado del nuevo CI y la generación del instalador de esta revisión se añadirán cuando termine su ejecución.
 
 ## Revisión de origen
 

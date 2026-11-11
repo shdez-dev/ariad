@@ -23,17 +23,30 @@ use crate::{
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 // Keep migration 0001 immutable. `b6caed9` shipped a second checksum after adding
-// the reparent trigger; reconcile only that known legacy checksum below.
+// the reparent trigger. Older Windows checkouts may also have hashed CRLF bytes;
+// recognize those exact historical variants, while new checkouts are pinned to LF.
 const CANONICAL_INITIAL_MIGRATION_CHECKSUM: [u8; 48] = [
     0xa3, 0xc1, 0xc6, 0xb4, 0x55, 0x43, 0xa9, 0xa0, 0x6d, 0xdc, 0x1f, 0xa1, 0xa7, 0x6d, 0xc5, 0x00,
     0xf7, 0x41, 0x8c, 0xd0, 0xc0, 0x55, 0xdd, 0x6f, 0x21, 0x49, 0x36, 0xba, 0x71, 0xb7, 0x6e, 0x81,
     0x5a, 0x95, 0xd6, 0x62, 0x47, 0x8b, 0x31, 0x50, 0x4f, 0xd7, 0x57, 0x8d, 0xa4, 0xe3, 0x4f, 0x56,
 ];
 
+const CANONICAL_INITIAL_MIGRATION_CRLF_CHECKSUM: [u8; 48] = [
+    0x99, 0x38, 0x5d, 0x4e, 0x81, 0xd1, 0x80, 0xda, 0x5a, 0x9e, 0x2b, 0x1b, 0x47, 0x12, 0x25, 0xda,
+    0x78, 0xdb, 0xbd, 0xc9, 0xf0, 0x6a, 0xf8, 0x20, 0x0a, 0x61, 0x75, 0x6c, 0xb7, 0x0c, 0x95, 0xbd,
+    0x46, 0x8d, 0x62, 0xe8, 0x81, 0xcc, 0xf6, 0x81, 0x3a, 0xc2, 0x56, 0xf9, 0x9d, 0x26, 0x07, 0xb7,
+];
+
 const LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM: [u8; 48] = [
     0xc0, 0x0d, 0x4c, 0x19, 0x7c, 0x67, 0x4d, 0x69, 0x19, 0xc8, 0xcf, 0xe7, 0xe6, 0xb9, 0x62, 0x86,
     0x28, 0x5d, 0x10, 0x62, 0xdd, 0x11, 0xde, 0xc7, 0x74, 0xb5, 0x92, 0x21, 0xd6, 0xdf, 0xb3, 0x9c,
     0x07, 0x96, 0xc4, 0xe1, 0x5b, 0x79, 0x2d, 0x61, 0x82, 0x6b, 0x69, 0x92, 0x6b, 0x7f, 0xdf, 0x1b,
+];
+
+const LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CRLF_CHECKSUM: [u8; 48] = [
+    0x3a, 0xab, 0x94, 0xb4, 0xf6, 0xbf, 0x4e, 0x68, 0xe2, 0xe0, 0x4f, 0xf2, 0x50, 0x24, 0xa2, 0xec,
+    0xc2, 0x22, 0x57, 0xdf, 0xa4, 0xe2, 0x77, 0xe4, 0x71, 0xa5, 0xa3, 0x56, 0x06, 0x0a, 0x8a, 0x5f,
+    0x5e, 0xd5, 0xf2, 0x89, 0xf7, 0x8e, 0x19, 0x07, 0x07, 0x2d, 0x76, 0x3c, 0x26, 0x52, 0xd1, 0x24,
 ];
 
 #[derive(Clone)]
@@ -134,9 +147,19 @@ async fn reconcile_legacy_initial_migration_checksum(
     )
     .fetch_optional(pool)
     .await?;
-    if applied_checksum.as_deref()
-        != Some(LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.as_slice())
-    {
+    let Some(applied_checksum) = applied_checksum else {
+        return Ok(());
+    };
+    if applied_checksum.as_slice() == CANONICAL_INITIAL_MIGRATION_CHECKSUM {
+        return Ok(());
+    }
+
+    let known_historical_checksums = [
+        LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.as_slice(),
+        CANONICAL_INITIAL_MIGRATION_CRLF_CHECKSUM.as_slice(),
+        LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CRLF_CHECKSUM.as_slice(),
+    ];
+    if !known_historical_checksums.contains(&applied_checksum.as_slice()) {
         return Ok(());
     }
 
@@ -144,7 +167,7 @@ async fn reconcile_legacy_initial_migration_checksum(
         "UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1 AND success = 1 AND checksum = ?",
     )
     .bind(CANONICAL_INITIAL_MIGRATION_CHECKSUM.as_slice())
-    .bind(LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CHECKSUM.as_slice())
+    .bind(applied_checksum)
     .execute(pool)
     .await?;
 
@@ -3753,6 +3776,68 @@ mod tests {
         assert_eq!(integrity, "ok");
         reopened.close().await;
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn known_crlf_initial_migration_checksums_are_reconciled_without_losing_inventory() {
+        for (index, checksum) in [
+            CANONICAL_INITIAL_MIGRATION_CRLF_CHECKSUM,
+            LEGACY_INITIAL_MIGRATION_WITH_REPARENT_TRIGGER_CRLF_CHECKSUM,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory =
+                std::env::temp_dir().join(format!("ariadna-crlf-migration-{index}-{unique}"));
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join("inventory.sqlite3");
+
+            let database = SqliteDatabase::open(&path).await.unwrap();
+            SqliteInventoryRepository::new(&database)
+                .insert_product(
+                    &Product::new(format!("SKU-CRLF-{index}"), "Caja conservada", "unidad")
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 1")
+                .bind(checksum.as_slice())
+                .execute(database.pool())
+                .await
+                .unwrap();
+            database.close().await;
+
+            let reopened = SqliteDatabase::open(&path).await.unwrap();
+            let sku = format!("SKU-CRLF-{index}");
+            let product_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku = ?")
+                    .bind(sku)
+                    .fetch_one(reopened.pool())
+                    .await
+                    .unwrap();
+            let applied_checksum: Vec<u8> =
+                sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+                    .fetch_one(reopened.pool())
+                    .await
+                    .unwrap();
+            let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+                .fetch_one(reopened.pool())
+                .await
+                .unwrap();
+            assert_eq!(product_count, 1);
+            assert_eq!(
+                applied_checksum.as_slice(),
+                CANONICAL_INITIAL_MIGRATION_CHECKSUM.as_slice()
+            );
+            assert_eq!(integrity, "ok");
+
+            reopened.close().await;
+            std::fs::remove_dir_all(directory).unwrap();
+        }
     }
 
     #[tokio::test]
