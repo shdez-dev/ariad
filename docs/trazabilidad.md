@@ -137,3 +137,11 @@ Las suites automatizadas respaldan modelos, validadores, casos de uso, persisten
 - **ARD-15, simulador:** repetir la misma semilla y comparar la secuencia visible; cotejar los escenarios normal, duplicado, etiqueta desconocida, ubicación inválida y destino ocupado; confirmar fuente sintética y vínculo de cada alerta con el intento exacto, incluso cuando no exista unidad registrada.
 
 La revisión parcial previa observó el mapa, el detalle de una posición, búsqueda de producto/unidad, CRUD básico, errores de duplicado, destino ocupado y escenarios del simulador. Esos resultados no cubren todos los puntos anteriores ni sustituyen una nueva comprobación, criterio por criterio, en el estado candidato.
+
+## Medición de resultados ARD-26, actualización del 11-11-2026
+
+La línea base inicial de ARD-21 conserva tres ejecuciones independientes, detalladas en [`ard-21-baseline.md`](performance/ard-21-baseline.md). Se agregó una repetición complementaria, sin mezclarla con las medianas anteriores, en [`ard-21-run-04.md`](performance/evidence/ard-21-run-04.md). Se ejecutó localmente sobre la revisión `691104435059`, en Windows x64 con Intel Core i5-12450H, 31,8 GiB, `rustc 1.99.1` y SQLite 3.51.3, con datos sintéticos: 500 unidades, 255 ubicaciones totales (252 posiciones), 25 productos y 10.000 eventos aceptados. Cada operación tuvo 10 calentamientos y 101 muestras.
+
+En esa cuarta ejecución, el p95 fue 3,717 ms para búsqueda transversal, 0,389 ms para historial y 23,182 ms para movimiento SQLite. Las tres operaciones quedaron bajo la meta provisional de 2.000 ms. El resultado cubre casos de uso Rust y SQLite; excluye interfaz, IPC, renderizado y concurrencia y no es una medición de una bodega. La tabla histórica de tres corridas no se recalculó ni se combinó con esta repetición.
+
+ARD-26 queda parcialmente respaldada: el volumen sintético y las operaciones medidas cumplen la referencia indicada, pero no existe porcentaje agregado para MR-01 ni MR-02 porque la aceptación visual prioritaria de ARD-11 a ARD-15 sigue incompleta y no se fijó un denominador de escenarios para MR-02. MR-05 no aplica sin una línea base y un piloto autorizado. No se infiere ahorro de tiempo, desplazamientos, errores ni costos en una operación real.

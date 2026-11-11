@@ -63,6 +63,18 @@ Resultados p50/p95 de cada repetición:
 
 La meta provisional de p95 <= 2 s se cumple en las tres repeticiones. El mayor p95 observado fue 191,665 ms en movimientos. Las mediciones muestran dispersión, pero no aíslan su causa; los rangos y los tres informes se conservan para que el resultado no se reduzca a una sola corrida.
 
+### Repetición complementaria del 11 de noviembre de 2026
+
+Se hizo una ejecución adicional sobre la revisión `691104435059`, con la misma carga, equipo y compilador. El informe completo está en [ard-21-run-04.md](evidence/ard-21-run-04.md). Esta corrida se registra separada del conjunto inicial de tres: sus valores no se combinan con las medianas ni los rangos anteriores.
+
+| Operación | p50 (ms) | p95 (ms) | Muestras | Meta p95 |
+| --- | ---: | ---: | ---: | --- |
+| Búsqueda transversal de SKU-000 | 2,745 | 3,717 | 101 | Cumple |
+| Historial completo de unit-000000 | 0,247 | 0,389 | 101 | Cumple |
+| Movimiento SQLite de una unidad almacenada | 20,546 | 23,182 | 101 | Cumple |
+
+Cada operación tuvo 10 calentamientos previos. La medición cubre el caso de uso Rust y SQLite; excluye ventana, serialización IPC, renderizado y concurrencia. Es una repetición en un solo equipo, no una nueva línea base estadística ni una medición de bodega. Los tres p95 observados están por debajo de la meta provisional de 2.000 ms.
+
 ## Reproducir
 
 Desde la raíz del repositorio, con Rust y las herramientas de compilación de Windows instaladas:
