@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 10 de noviembre de 2026. ARD-10 a ARD-16 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines con correlación, duración de comandos, minimización de datos y rotación.
+Estado: actualizada el 10 de noviembre de 2026. ARD-10 a ARD-17 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines y ARD-17 amplía las pruebas unitarias de dominio.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -60,6 +60,8 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 
 ARD-14 añade `search_inventory`, `list_alerts` y `mark_alert_reviewed`, mantiene el acceso vía IPC y presenta búsqueda, cronología y alertas. ARD-15 añade `run_simulation`, cinco recorridos sintéticos y la migración que admite vínculo exacto a eventos o intentos. Sus alertas se insertan en la misma transacción que el registro causante y la bandeja puede abrir un intento aunque no exista ficha de unidad. ARD-15 quedó publicada en `feat/ard-15-simulator`, commit `b8dbf20`; sus 50 pruebas Rust y verificaciones frontend pasaron.
 
-ARD-16 amplía el registrador local para escribir eventos JSON Lines con `operationId`, comando, resultado, duración y código estable. El ID se devuelve en errores IPC y se muestra junto al mensaje seguro. Los detalles dinámicos de persistencia y los payloads del inventario no se registran. Cada archivo queda limitado a 5 MiB y se conservan hasta tres copias. Publicada en `feat/ard-16-diagnostics`, commit `ecfee57`. Pasan 54 pruebas Rust, fmt, Clippy, `npm run build` y 14 pruebas frontend (3 de mapa, 4 de catálogo, 5 del simulador y 2 de errores IPC). La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente.
+ARD-16 amplía el registrador local para escribir eventos JSON Lines con `operationId`, comando, resultado, duración y código estable. El ID se devuelve en errores IPC y se muestra junto al mensaje seguro. Los detalles dinámicos de persistencia y los payloads del inventario no se registran. Cada archivo queda limitado a 5 MiB y se conservan hasta tres copias. Publicada en `feat/ard-16-diagnostics`, commit `ecfee57`.
+
+ARD-17 añade pruebas unitarias para límites de productos, jerarquías y datos de ubicación, líneas con lote, estados de unidades, ocupación, eventos, correcciones y alertas. Los escenarios de eventId duplicado y conflicto de contenido siguen comprobados por las pruebas de repositorio SQLite existentes. Publicada en `feat/ard-17-domain-tests`, commit `1097d5a`. Pasan 65 pruebas Rust, fmt, Clippy, `npm run build` y 14 pruebas frontend (3 de mapa, 4 de catálogo, 5 del simulador y 2 de errores IPC). La aceptación visual manual de ARD-11 a ARD-15 continúa pendiente.
 
 La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
