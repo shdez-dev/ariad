@@ -70,16 +70,53 @@ export type InventorySearchResultDto = {
 
 export type AlertDto = {
   id: string;
-  movementEventId: string;
+  recordId: string;
+  movementEventId: string | null;
+  movementAttemptId?: number | null;
+  targetKind?: string;
+  eventId: string;
   kind: string;
   status: "open" | "reviewed" | "resolved";
   createdAtMs: number;
   handlingUnitId: string;
-  handlingUnitLabel: string;
+  handlingUnitLabel: string | null;
   eventKind: string;
+  eventResult: string;
+  eventRejectionReason: string | null;
   occurredAtMs: number;
   originLocationCode: string | null;
   destinationLocationCode: string | null;
+  source?: string | null;
+};
+
+export type SimulationScenario =
+  | "normal"
+  | "duplicate"
+  | "unknown_label"
+  | "invalid_location"
+  | "occupied_destination";
+
+export type SimulationStepDto = {
+  id: string;
+  label: string;
+  result: string;
+  message: string;
+  recordId?: string | null;
+  eventId?: string | null;
+  handlingUnitId?: string | null;
+  alertId?: string | null;
+};
+
+export type SimulationRunInput = {
+  seed: string;
+  scenario: SimulationScenario;
+};
+
+export type SimulationRunDto = {
+  seed: string;
+  scenario: SimulationScenario;
+  steps: SimulationStepDto[];
+  summary: string;
 };
 
 export type IpcErrorCode =
@@ -225,4 +262,6 @@ export const inventoryIpc = {
   listAlerts: () => call<AlertDto[]>("list_alerts"),
   markAlertReviewed: (alertId: string) =>
     call<AlertDto>("mark_alert_reviewed", { alertId }),
+  runSimulation: (input: SimulationRunInput) =>
+    callInventoryChange<SimulationRunDto>("run_simulation", input),
 };

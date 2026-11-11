@@ -6,6 +6,7 @@ import {
   type MovementHistoryEntryDto,
 } from "../lib/ipc";
 import { getLocationPath } from "../lib/catalog-model";
+import { findHistoryEntry } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -56,7 +57,7 @@ function dateLabel(timestamp: number): string {
 
 export function mountUnitsView(): {
   refresh: () => Promise<void>;
-  openByIdentifier: (identifier: string, eventId?: string) => Promise<void>;
+  openByIdentifier: (identifier: string, recordId?: string) => Promise<void>;
 } {
   const rows = requiredElement<HTMLTableSectionElement>("#units-table-body");
   const status = requiredElement<HTMLElement>("#units-status");
@@ -68,7 +69,7 @@ export function mountUnitsView(): {
   let units: HandlingUnitDto[] = [];
   let locations: LocationDto[] = [];
   let selectedUnitId: string | null = null;
-  let selectedEventId: string | null = null;
+  let selectedRecordId: string | null = null;
   let requestNumber = 0;
   let refreshRequestNumber = 0;
   let loadFailed = false;
@@ -302,7 +303,9 @@ export function mountUnitsView(): {
         }
         const source = document.createElement("p");
         source.className = "movement-history-source";
-        source.textContent = `Evento ${entry.eventId} · ${entry.source}`;
+        source.textContent = entry.source === "simulator"
+          ? `Evento ${entry.eventId} · Dato sintético del simulador`
+          : `Evento ${entry.eventId} · ${entry.source}`;
         item.append(source);
         timeline.append(item);
       }
@@ -312,11 +315,11 @@ export function mountUnitsView(): {
 
   async function openDetails(
     unit: HandlingUnitDto,
-    focusEventId?: string,
+    focusRecordId?: string,
     transferFocus = false,
   ): Promise<void> {
     selectedUnitId = unit.id;
-    selectedEventId = focusEventId ?? null;
+    selectedRecordId = focusRecordId ?? null;
     const currentRequest = ++requestNumber;
     renderDetail(unit, null);
     detailAnnouncement.textContent = `Consultando detalle del pallet ${unit.label}.`;
@@ -350,13 +353,13 @@ export function mountUnitsView(): {
       detailAnnouncement.textContent = `Detalle e historial del pallet ${latest.label} cargados.`;
     }
     if (transferFocus) {
-      const eventTarget = focusEventId && movementHistory
-        ? [...detail.querySelectorAll<HTMLElement>("[data-history-event-id]")]
-        .find((item) => item.dataset.historyEventId === focusEventId
-          || item.dataset.historyRecordId === focusEventId)
+      const exactEntry = findHistoryEntry(movementHistory ?? [], focusRecordId);
+      const eventTarget = exactEntry
+        ? [...detail.querySelectorAll<HTMLElement>("[data-history-record-id]")]
+          .find((item) => item.dataset.historyRecordId === exactEntry.recordId)
         : undefined;
-      if (focusEventId && movementHistory && !eventTarget) {
-        setStatus(`El evento ${focusEventId} no aparece en la cronología actual.`, "error");
+      if (focusRecordId && movementHistory && !eventTarget) {
+        setStatus(`El registro ${focusRecordId} no aparece en la cronología actual.`, "error");
       }
       const focusTarget = eventTarget ?? detail.querySelector<HTMLElement>(".detail-title");
       focusTarget?.focus();
@@ -364,18 +367,120 @@ export function mountUnitsView(): {
     }
   }
 
-  async function openByIdentifier(identifier: string, eventId?: string): Promise<void> {
+  function renderHistoryOnly(identifier: string, history: MovementHistoryEntryDto[], recordId?: string): void {
+    selectedUnitId = null;
+    selectedRecordId = recordId ?? null;
+    detail.replaceChildren();
+    const header = document.createElement("div");
+    header.className = "detail-header";
+    const kicker = document.createElement("p");
+    kicker.className = "detail-kicker";
+    kicker.textContent = "REGISTRO SINTÉTICO";
+    const title = document.createElement("h2");
+    title.className = "detail-title";
+    title.tabIndex = -1;
+    title.textContent = "Intento sin unidad registrada";
+    const identity = document.createElement("p");
+    identity.className = "detail-name";
+    identity.textContent = identifier;
+    header.append(kicker, title, identity);
+    const explanation = document.createElement("p");
+    explanation.className = "detail-muted";
+    explanation.textContent = "No existe una ficha de unidad para esta referencia. Se muestra el historial persistido y se enfoca el registro exacto solicitado.";
+    detail.append(header, explanation);
+
+    const exactEntry = findHistoryEntry(history, recordId);
+    const historyTitle = document.createElement("h3");
+    historyTitle.className = "detail-section-title movement-history-title";
+    historyTitle.textContent = exactEntry ? "Registro exacto" : "Historial disponible";
+    detail.append(historyTitle);
+    if (history.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "detail-warning";
+      empty.textContent = `No hay registros asociados a ${identifier}.`;
+      detail.append(empty);
+      title.focus();
+      return;
+    }
+
+    const timeline = document.createElement("ol");
+    timeline.className = "movement-history-list";
+    const displayedEntries = exactEntry ? [exactEntry] : history;
+    for (const entry of displayedEntries) {
+      const item = document.createElement("li");
+      item.className = "movement-history-entry";
+      item.dataset.historyEventId = entry.eventId;
+      item.dataset.historyRecordId = entry.recordId;
+      item.tabIndex = -1;
+      const heading = document.createElement("div");
+      heading.className = "movement-history-heading";
+      const kind = document.createElement("strong");
+      kind.textContent = movementKindLabel(entry.kind);
+      const outcome = document.createElement("span");
+      outcome.className = `record-badge history-result-${entry.result}`;
+      outcome.textContent = movementResultLabel(entry.result);
+      heading.append(kind, outcome);
+      const date = document.createElement("p");
+      date.className = "detail-muted";
+      date.textContent = `Ocurrido ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
+      const reference = document.createElement("p");
+      reference.className = "movement-history-source";
+      reference.textContent = `Registro ${entry.recordId} · evento ${entry.eventId} · ${entry.source === "simulator" ? "Dato sintético del simulador" : entry.source}`;
+      item.append(heading, date, reference);
+      if (entry.rejectionReason) {
+        const reason = document.createElement("p");
+        reason.className = "detail-warning history-reason";
+        reason.textContent = `Motivo: ${entry.rejectionReason}`;
+        item.append(reason);
+      }
+      timeline.append(item);
+    }
+    detail.append(timeline);
+    const focusTarget = exactEntry
+      ? [...timeline.querySelectorAll<HTMLElement>("[data-history-record-id]")]
+        .find((item) => item.dataset.historyRecordId === exactEntry.recordId)
+      : title;
+    focusTarget?.focus();
+    if (exactEntry) focusTarget?.scrollIntoView({ block: "nearest" });
+  }
+
+  async function openByIdentifier(identifier: string, recordId?: string): Promise<void> {
+    const currentRequest = ++requestNumber;
+    selectedUnitId = null;
+    selectedRecordId = recordId ?? null;
+    detail.replaceChildren();
+    detailAnnouncement.textContent = `Buscando la unidad y el registro ${recordId ?? identifier}.`;
     try {
       const unit = await inventoryIpc.getHandlingUnit(identifier);
+      if (currentRequest !== requestNumber) return;
       if (!unit) {
-        setStatus(`No se encontró la unidad ${identifier}. Actualiza la consulta.`, "error");
+        const history = await inventoryIpc.getMovementHistory(identifier);
+        if (currentRequest !== requestNumber) return;
+        renderHistoryOnly(identifier, history, recordId);
+        if (history.length === 0) {
+          setStatus(`No hay historial asociado a ${identifier}.`, "error");
+          detailAnnouncement.textContent = `No hay historial asociado a ${identifier}.`;
+        } else if (recordId && !findHistoryEntry(history, recordId)) {
+          setStatus(`No se encontró el registro ${recordId}; se muestra el historial disponible.`, "error");
+          detailAnnouncement.textContent = `No se encontró el registro ${recordId}.`;
+        } else {
+          setStatus("Unidad no registrada; se muestra el historial persistido.");
+          detailAnnouncement.textContent = "Se abrió el registro de historial sin ficha de unidad.";
+        }
         return;
       }
       if (!units.some((item) => item.id === unit.id)) units.push(unit);
       renderRows();
-      await openDetails(unit, eventId, true);
+      await openDetails(unit, recordId, true);
     } catch (error: unknown) {
+      if (currentRequest !== requestNumber) return;
       setStatus(messageFor(error), "error");
+      detailAnnouncement.textContent = `No se pudo abrir el registro ${recordId ?? identifier}.`;
+      detail.replaceChildren();
+      const failure = document.createElement("p");
+      failure.className = "detail-warning";
+      failure.textContent = messageFor(error);
+      detail.append(failure);
     }
   }
 
@@ -396,7 +501,7 @@ export function mountUnitsView(): {
       renderRows();
       setStatus(`${units.length} ${units.length === 1 ? "unidad cargada" : "unidades cargadas"}.`);
       const selected = selectedUnitId ? units.find((item) => item.id === selectedUnitId) : undefined;
-      if (selected) await openDetails(selected, selectedEventId ?? undefined);
+      if (selected) await openDetails(selected, selectedRecordId ?? undefined);
       else if (selectedUnitId) {
         selectedUnitId = null;
         detail.replaceChildren();

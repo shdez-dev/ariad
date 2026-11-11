@@ -7,11 +7,13 @@ use crate::{
         DeactivateProduct, DispatchUnit, EventOutcome, GetHandlingUnit, GetLocation,
         GetMovementHistory, GetProduct, InventorySearchKind, InventorySearchResult, ListAlerts,
         ListHandlingUnits, ListLocations, ListProducts, MarkAlertReviewed, MoveUnit, ReceiveLine,
-        ReceiveUnit, RecordCorrection, SearchInventory, StoreUnit, UpdateLocation, UpdateProduct,
-        map_error_for_ui,
+        ReceiveUnit, RecordCorrection, RunSimulation, SearchInventory, SimulationScenario,
+        SimulationStep, StoreUnit, UpdateLocation, UpdateProduct, map_error_for_ui,
     },
     diagnostic_log::DiagnosticLog,
-    domain::{AlertStatus, DomainError, HandlingUnit, Location, LocationKind, Product},
+    domain::{
+        AlertRecordTarget, AlertStatus, DomainError, HandlingUnit, Location, LocationKind, Product,
+    },
     state::AppState,
 };
 
@@ -240,33 +242,133 @@ impl From<AlertStatus> for AlertStatusResponse {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertTargetKindResponse {
+    MovementEvent,
+    MovementAttempt,
+}
+
+impl From<&AlertRecordTarget> for AlertTargetKindResponse {
+    fn from(value: &AlertRecordTarget) -> Self {
+        match value {
+            AlertRecordTarget::MovementEvent { .. } => Self::MovementEvent,
+            AlertRecordTarget::MovementAttempt { .. } => Self::MovementAttempt,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AlertResponse {
     pub id: String,
-    pub movement_event_id: String,
+    pub movement_event_id: Option<String>,
+    pub movement_attempt_id: Option<i64>,
+    pub record_id: String,
+    pub target_kind: AlertTargetKindResponse,
+    pub event_id: String,
     pub kind: String,
     pub status: AlertStatusResponse,
     pub created_at_ms: i64,
     pub handling_unit_id: String,
-    pub handling_unit_label: String,
+    pub handling_unit_label: Option<String>,
     pub event_kind: String,
+    pub event_result: String,
+    pub event_rejection_reason: Option<String>,
+    pub source: String,
     pub occurred_at_ms: i64,
     pub origin_location_code: Option<String>,
     pub destination_location_code: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SimulationScenarioInput {
+    Normal,
+    Duplicate,
+    UnknownLabel,
+    InvalidLocation,
+    OccupiedDestination,
+}
+
+impl From<SimulationScenarioInput> for SimulationScenario {
+    fn from(value: SimulationScenarioInput) -> Self {
+        match value {
+            SimulationScenarioInput::Normal => Self::Normal,
+            SimulationScenarioInput::Duplicate => Self::Duplicate,
+            SimulationScenarioInput::UnknownLabel => Self::UnknownLabel,
+            SimulationScenarioInput::InvalidLocation => Self::InvalidLocation,
+            SimulationScenarioInput::OccupiedDestination => Self::OccupiedDestination,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationStepResponse {
+    pub id: String,
+    pub label: String,
+    pub result: String,
+    pub message: String,
+    pub record_id: Option<String>,
+    pub event_id: Option<String>,
+    pub handling_unit_id: Option<String>,
+    pub alert_id: Option<String>,
+}
+
+impl From<SimulationStep> for SimulationStepResponse {
+    fn from(value: SimulationStep) -> Self {
+        Self {
+            id: value.id,
+            label: value.label,
+            result: value.result,
+            message: value.message,
+            record_id: value.record_id,
+            event_id: value.event_id,
+            handling_unit_id: value.handling_unit_id,
+            alert_id: value.alert_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SimulationResponse {
+    pub seed: String,
+    pub scenario: String,
+    pub steps: Vec<SimulationStepResponse>,
+    pub summary: String,
+}
+
+impl From<crate::application::SimulationResponse> for SimulationResponse {
+    fn from(value: crate::application::SimulationResponse) -> Self {
+        Self {
+            seed: value.seed,
+            scenario: value.scenario.as_str().to_owned(),
+            steps: value.steps.into_iter().map(Into::into).collect(),
+            summary: value.summary,
+        }
+    }
 }
 
 impl From<AlertEntry> for AlertResponse {
     fn from(value: AlertEntry) -> Self {
         Self {
             id: value.alert.id,
-            movement_event_id: value.alert.movement_event_id,
+            movement_event_id: value.alert.target.movement_event_id().map(str::to_owned),
+            movement_attempt_id: value.alert.target.movement_attempt_id(),
+            record_id: value.alert.target.record_id(),
+            target_kind: (&value.alert.target).into(),
+            event_id: value.alert.target.event_id().to_owned(),
             kind: value.alert.kind,
             status: value.alert.status.into(),
             created_at_ms: value.alert.created_at_ms,
             handling_unit_id: value.handling_unit_id,
             handling_unit_label: value.handling_unit_label,
             event_kind: value.event_kind,
+            event_result: value.event_result,
+            event_rejection_reason: value.event_rejection_reason,
+            source: value.source,
             occurred_at_ms: value.occurred_at_ms,
             origin_location_code: value.origin_location_code,
             destination_location_code: value.destination_location_code,
@@ -745,6 +847,21 @@ pub async fn mark_alert_reviewed(
     .map(Into::into)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub async fn run_simulation(
+    state: State<'_, AppState>,
+    seed: String,
+    scenario: SimulationScenarioInput,
+) -> Result<SimulationResponse, IpcError> {
+    let use_case = RunSimulation::new(state.inventory_repository.clone());
+    expose(
+        &state,
+        "ipc.simulation.run",
+        use_case.execute(&seed, scenario.into()).await,
+    )
+    .map(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,8 +911,11 @@ mod tests {
             )
             .unwrap(),
             handling_unit_id: "unit-1".to_owned(),
-            handling_unit_label: "PALLET-1".to_owned(),
+            handling_unit_label: Some("PALLET-1".to_owned()),
             event_kind: "received".to_owned(),
+            event_result: "accepted".to_owned(),
+            event_rejection_reason: None,
+            source: "simulator".to_owned(),
             occurred_at_ms: 1_800_000_000_010,
             origin_location_code: None,
             destination_location_code: None,
@@ -804,6 +924,71 @@ mod tests {
         assert_eq!(alert_json["movementEventId"], "event-1");
         assert_eq!(alert_json["handlingUnitLabel"], "PALLET-1");
         assert_eq!(alert_json["status"], "open");
+        assert_eq!(alert_json["recordId"], "event-1");
+        assert_eq!(alert_json["targetKind"], "movement_event");
+        assert_eq!(alert_json["source"], "simulator");
+
+        let attempt_alert = AlertResponse::from(AlertEntry {
+            alert: crate::domain::Alert::from_persisted(
+                "alert-attempt",
+                AlertRecordTarget::MovementAttempt {
+                    attempt_id: 17,
+                    event_id: "event-duplicate".to_owned(),
+                },
+                "duplicate_reading",
+                1_800_000_000_020,
+                AlertStatus::Open,
+            )
+            .unwrap(),
+            handling_unit_id: "UNKNOWN-LABEL-1".to_owned(),
+            handling_unit_label: None,
+            event_kind: "stored".to_owned(),
+            event_result: "duplicate".to_owned(),
+            event_rejection_reason: None,
+            source: "simulator".to_owned(),
+            occurred_at_ms: 1_800_000_000_019,
+            origin_location_code: None,
+            destination_location_code: Some("P1".to_owned()),
+        });
+        let attempt_alert_json = serde_json::to_value(attempt_alert).unwrap();
+        assert_eq!(attempt_alert_json["targetKind"], "movement_attempt");
+        assert_eq!(
+            attempt_alert_json["movementEventId"],
+            serde_json::Value::Null
+        );
+        assert_eq!(attempt_alert_json["movementAttemptId"], 17);
+        assert_eq!(attempt_alert_json["recordId"], "attempt:17");
+        assert_eq!(attempt_alert_json["eventId"], "event-duplicate");
+        assert_eq!(
+            attempt_alert_json["handlingUnitLabel"],
+            serde_json::Value::Null
+        );
+        assert_eq!(attempt_alert_json["eventResult"], "duplicate");
+        assert_eq!(attempt_alert_json["destinationLocationCode"], "P1");
+
+        let scenario: SimulationScenarioInput =
+            serde_json::from_str("\"occupied_destination\"").unwrap();
+        assert_eq!(scenario, SimulationScenarioInput::OccupiedDestination);
+        let run = SimulationResponse::from(crate::application::SimulationResponse {
+            seed: "seed-1".to_owned(),
+            scenario: scenario.into(),
+            steps: vec![SimulationStep {
+                id: "occupied-destination".to_owned(),
+                label: "Destino ocupado".to_owned(),
+                result: "rejected".to_owned(),
+                message: "La posición de destino ya está ocupada.".to_owned(),
+                record_id: Some("attempt:17".to_owned()),
+                event_id: Some("event-duplicate".to_owned()),
+                handling_unit_id: Some("unit-1".to_owned()),
+                alert_id: Some("alert-attempt-17".to_owned()),
+            }],
+            summary: "Escenario terminado.".to_owned(),
+        });
+        let run_json = serde_json::to_value(run).unwrap();
+        assert_eq!(run_json["scenario"], "occupied_destination");
+        assert_eq!(run_json["steps"][0]["id"], "occupied-destination");
+        assert_eq!(run_json["steps"][0]["recordId"], "attempt:17");
+        assert_eq!(run_json["steps"][0]["alertId"], "alert-attempt-17");
     }
 
     #[test]

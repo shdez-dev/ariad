@@ -26,6 +26,7 @@
         <button class="nav-button" type="button" data-view-button="operations" aria-pressed="false">Movimientos</button>
         <button class="nav-button" type="button" data-view-button="search" aria-pressed="false">Buscar</button>
         <button class="nav-button" type="button" data-view-button="alerts" aria-pressed="false">Alertas</button>
+        <button class="nav-button" type="button" data-view-button="simulator" aria-pressed="false">Simulador</button>
       </nav>
       <div class="topbar-meta">
         <span class="environment-badge"><span class="status-dot" aria-hidden="true"></span>Datos locales</span>
@@ -327,13 +328,63 @@
         <div class="module-heading">
           <div>
             <p class="eyebrow"><span class="eyebrow-mark">07</span> REVISIÓN OPERATIVA</p>
-            <h1 id="alerts-title">Alertas</h1>
+            <h1 id="alerts-title" tabindex="-1">Alertas</h1>
             <p class="intro-copy">Revisa alertas persistidas y abre el movimiento asociado en la cronología de su unidad.</p>
           </div>
           <button class="secondary-button" id="alerts-refresh" type="button">Actualizar alertas</button>
         </div>
         <p class="module-status" id="alerts-status" role="status" aria-live="polite">Consultando alertas locales…</p>
         <div class="alert-list" id="alerts-list" aria-label="Alertas persistidas"></div>
+      </section>
+
+      <section class="app-view" id="view-simulator" aria-labelledby="simulator-title" hidden>
+        <div class="module-heading">
+          <div>
+            <p class="eyebrow"><span class="eyebrow-mark">08</span> RECORRIDOS DE DEMOSTRACIÓN</p>
+            <h1 id="simulator-title">Simulador determinista</h1>
+            <p class="intro-copy">Genera un recorrido reproducible para observar operaciones y anomalías de inventario.</p>
+          </div>
+        </div>
+        <div class="simulation-notice" role="note">
+          <span class="simulation-source-badge">Datos sintéticos</span>
+          <p>Los movimientos se guardan en el inventario local mediante las mismas reglas que las operaciones. No se conectan lectores ni hardware. Repetir la misma semilla y el mismo recorrido reproduce las mismas referencias; los pasos ya aplicados se reconocen como duplicados.</p>
+        </div>
+        <form class="editor-form simulator-form" id="simulator-form">
+          <div class="form-heading">
+            <div><p class="section-kicker">CONFIGURACIÓN</p><h2>Preparar recorrido</h2></div>
+          </div>
+          <div class="form-grid simulator-form-grid">
+            <label class="form-field" for="simulator-seed">Semilla
+              <input id="simulator-seed" name="seed" type="text" maxlength="80" required value="ARIADNA-DEMO-01" autocomplete="off" aria-describedby="simulator-seed-hint" />
+              <small id="simulator-seed-hint">Conserva esta semilla para reproducir el mismo recorrido.</small>
+            </label>
+            <label class="form-field" for="simulator-scenario">Recorrido
+              <select id="simulator-scenario" name="scenario" required>
+                <option value="normal">Recorrido normal</option>
+                <option value="duplicate">Evento duplicado</option>
+                <option value="unknown_label">Etiqueta desconocida</option>
+                <option value="invalid_location">Posición inválida</option>
+                <option value="occupied_destination">Destino ocupado</option>
+              </select>
+              <small>La anomalía seleccionada se genera de forma controlada dentro del recorrido.</small>
+            </label>
+          </div>
+          <div class="form-actions"><button class="primary-button" id="simulator-run" type="submit">Ejecutar simulación</button></div>
+        </form>
+        <p class="module-status" id="simulator-status" role="status" aria-live="polite">Elige una semilla y un recorrido para comenzar.</p>
+        <div class="simulator-output-grid">
+          <section class="simulation-results-panel" id="simulator-result-panel" aria-labelledby="simulator-results-title">
+            <div class="panel-heading">
+              <div><p class="section-kicker">EJECUCIÓN SINTÉTICA</p><h2 id="simulator-results-title">Resultado</h2></div>
+            </div>
+            <ol class="simulation-steps" id="simulator-steps">
+              <li class="simulation-empty">Los pasos de la ejecución aparecerán aquí.</li>
+            </ol>
+          </section>
+          <aside class="detail-panel simulator-record-detail" id="simulator-record-detail" aria-label="Detalle del registro simulado">
+            <div class="selection-empty"><span class="selection-mark" aria-hidden="true">◇</span><p class="detail-kicker">REGISTRO EXACTO</p><h2 class="detail-title">Selecciona un paso</h2><p class="detail-muted">Aquí se mostrará el registro asociado a una anomalía sin unidad guardada.</p></div>
+          </aside>
+        </div>
       </section>
 
       <footer class="app-footer">

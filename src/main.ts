@@ -4,11 +4,12 @@ import { mountLocationsView } from "./views/locations-view";
 import { mountOperationsView } from "./views/operations-view";
 import { mountProductsView } from "./views/products-view";
 import { mountSearchView } from "./views/search-view";
+import { mountSimulatorView } from "./views/simulator-view";
 import { mountUnitsView } from "./views/units-view";
 
 document.documentElement.dataset.app = "ariadna";
 
-type ViewName = "map" | "products" | "locations" | "units" | "operations" | "search" | "alerts";
+type ViewName = "map" | "products" | "locations" | "units" | "operations" | "search" | "alerts" | "simulator";
 
 const viewElements = new Map<ViewName, HTMLElement>([
   ["map", requiredElement<HTMLElement>("#view-map")],
@@ -18,6 +19,7 @@ const viewElements = new Map<ViewName, HTMLElement>([
   ["operations", requiredElement<HTMLElement>("#view-operations")],
   ["search", requiredElement<HTMLElement>("#view-search")],
   ["alerts", requiredElement<HTMLElement>("#view-alerts")],
+  ["simulator", requiredElement<HTMLElement>("#view-simulator")],
 ]);
 const navButtons = [...document.querySelectorAll<HTMLButtonElement>("[data-view-button]")];
 const productsView = mountProductsView();
@@ -26,6 +28,7 @@ const unitsView = mountUnitsView();
 const operationsView = mountOperationsView();
 const searchView = mountSearchView();
 const alertsView = mountAlertsView();
+const simulatorView = mountSimulatorView();
 let activeView: ViewName = "map";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -49,6 +52,7 @@ async function activateView(viewName: ViewName): Promise<void> {
   if (viewName === "operations") await operationsView.refresh();
   if (viewName === "search") await searchView.refresh();
   if (viewName === "alerts") await alertsView.refresh();
+  if (viewName === "simulator") await simulatorView.refresh();
 }
 
 for (const button of navButtons) {
@@ -65,13 +69,28 @@ window.addEventListener("ariadna:inventory-changed", () => {
 });
 
 window.addEventListener("ariadna:open-unit", (event: Event) => {
-  const detail = (event as CustomEvent<{ handlingUnitId: string; movementEventId?: string }>).detail;
+  const detail = (event as CustomEvent<{
+    handlingUnitId: string;
+    recordId?: string;
+    movementEventId?: string;
+  }>).detail;
   if (!detail?.handlingUnitId) return;
   void (async () => {
     const activation = activateView("units");
     requiredElement<HTMLElement>("#units-title").focus();
     await activation;
-    await unitsView.openByIdentifier(detail.handlingUnitId, detail.movementEventId);
+    await unitsView.openByIdentifier(detail.handlingUnitId, detail.recordId ?? detail.movementEventId);
+  })();
+});
+
+window.addEventListener("ariadna:open-alert", (event: Event) => {
+  const detail = (event as CustomEvent<{ alertId: string }>).detail;
+  if (!detail?.alertId) return;
+  void (async () => {
+    const activation = activateView("alerts");
+    requiredElement<HTMLElement>("#alerts-title").focus();
+    await activation;
+    alertsView.focusAlert(detail.alertId);
   })();
 });
 

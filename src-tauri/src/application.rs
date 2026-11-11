@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::domain::{
-    Alert, DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind, MovementCorrection,
-    MovementEvent, MovementKind, Product, Sku,
+    Alert, AlertIntent, DomainError, HandlingUnit, HandlingUnitLine, Location, LocationKind,
+    MovementCorrection, MovementEvent, MovementKind, Product, Sku,
 };
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -83,11 +83,28 @@ pub struct InventorySearchResult {
 pub struct AlertEntry {
     pub alert: Alert,
     pub handling_unit_id: String,
-    pub handling_unit_label: String,
+    pub handling_unit_label: Option<String>,
     pub event_kind: String,
+    pub event_result: String,
+    pub event_rejection_reason: Option<String>,
+    pub source: String,
     pub occurred_at_ms: i64,
     pub origin_location_code: Option<String>,
     pub destination_location_code: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MovementRecordResult {
+    Applied,
+    Duplicate,
+    Rejected(RepositoryError),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovementRecordOutcome {
+    pub result: MovementRecordResult,
+    pub record_id: String,
+    pub alert_id: Option<String>,
 }
 
 #[async_trait]
@@ -133,6 +150,17 @@ pub trait InventoryRepository: Send + Sync {
 
     async fn record_movement(&self, event: &MovementEvent)
     -> Result<EventOutcome, RepositoryError>;
+
+    async fn record_movement_with_alert(
+        &self,
+        event: &MovementEvent,
+        intent: &AlertIntent,
+    ) -> Result<MovementRecordOutcome, RepositoryError> {
+        let _ = (event, intent);
+        Err(RepositoryError::Storage(
+            "el repositorio no admite alertas atómicas".to_owned(),
+        ))
+    }
 
     async fn record_correction(
         &self,
@@ -596,6 +624,31 @@ impl StoreUnit {
         )?;
         Ok(self.repository.record_movement(&event).await?)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_with_alert(
+        &self,
+        event_id: &str,
+        handling_unit_id: &str,
+        destination_location_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+        alert_intent: &AlertIntent,
+    ) -> Result<MovementRecordOutcome, ApplicationError> {
+        let event = MovementEvent::new(
+            event_id,
+            handling_unit_id,
+            MovementKind::Stored,
+            None::<&str>,
+            Some(destination_location_id),
+            occurred_at_ms,
+            source,
+        )?;
+        Ok(self
+            .repository
+            .record_movement_with_alert(&event, alert_intent)
+            .await?)
+    }
 }
 
 pub struct MoveUnit {
@@ -626,6 +679,32 @@ impl MoveUnit {
             source,
         )?;
         Ok(self.repository.record_movement(&event).await?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_with_alert(
+        &self,
+        event_id: &str,
+        handling_unit_id: &str,
+        origin_location_id: &str,
+        destination_location_id: &str,
+        occurred_at_ms: i64,
+        source: &str,
+        alert_intent: &AlertIntent,
+    ) -> Result<MovementRecordOutcome, ApplicationError> {
+        let event = MovementEvent::new(
+            event_id,
+            handling_unit_id,
+            MovementKind::Moved,
+            Some(origin_location_id),
+            Some(destination_location_id),
+            occurred_at_ms,
+            source,
+        )?;
+        Ok(self
+            .repository
+            .record_movement_with_alert(&event, alert_intent)
+            .await?)
     }
 }
 
@@ -798,6 +877,671 @@ impl MarkAlertReviewed {
             return Err(DomainError::EmptyField("identificador de alerta").into());
         }
         Ok(self.repository.mark_alert_reviewed(alert_id).await?)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SimulationScenario {
+    Normal,
+    Duplicate,
+    UnknownLabel,
+    InvalidLocation,
+    OccupiedDestination,
+}
+
+impl SimulationScenario {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Duplicate => "duplicate",
+            Self::UnknownLabel => "unknown_label",
+            Self::InvalidLocation => "invalid_location",
+            Self::OccupiedDestination => "occupied_destination",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimulationStep {
+    pub id: String,
+    pub label: String,
+    pub result: String,
+    pub message: String,
+    pub record_id: Option<String>,
+    pub event_id: Option<String>,
+    pub handling_unit_id: Option<String>,
+    pub alert_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimulationResponse {
+    pub seed: String,
+    pub scenario: SimulationScenario,
+    pub steps: Vec<SimulationStep>,
+    pub summary: String,
+}
+
+pub struct RunSimulation {
+    repository: Arc<dyn InventoryRepository>,
+}
+
+const SIMULATED_PRODUCT_DESCRIPTION: &str = "Producto sintético de Ariadna";
+const SIMULATED_PRODUCT_UNIT: &str = "unidad";
+
+impl RunSimulation {
+    pub fn new(repository: Arc<dyn InventoryRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn execute(
+        &self,
+        seed: &str,
+        scenario: SimulationScenario,
+    ) -> Result<SimulationResponse, ApplicationError> {
+        let seed = seed.trim();
+        if seed.is_empty() {
+            return Err(DomainError::EmptyField("semilla de simulación").into());
+        }
+        if seed.len() > 128 {
+            return Err(DomainError::FieldTooLong("semilla de simulación").into());
+        }
+
+        let seed = seed.to_owned();
+        let seed_hash = stable_seed_hash(&seed);
+        let run = SimulationRunContext {
+            seed_hash,
+            base_time_ms: 1_800_000_000_000 + (seed_hash % 1_000_000) as i64 * 1_000,
+        };
+        let catalog = self.ensure_catalog(&run).await?;
+        let steps = match scenario {
+            SimulationScenario::Normal => self.run_normal(&run, &catalog).await?,
+            SimulationScenario::Duplicate => self.run_duplicate(&run, &catalog).await?,
+            SimulationScenario::UnknownLabel => self.run_unknown_label(&run, &catalog).await?,
+            SimulationScenario::InvalidLocation => {
+                self.run_invalid_location(&run, &catalog).await?
+            }
+            SimulationScenario::OccupiedDestination => {
+                self.run_occupied_destination(&run, &catalog).await?
+            }
+        };
+
+        let summary = match scenario {
+            SimulationScenario::Normal => {
+                "Recorrido normal de recepción, ubicación, traslado y despacho completado."
+            }
+            SimulationScenario::Duplicate => {
+                "Se registró la lectura duplicada y su alerta quedó enlazada al intento exacto."
+            }
+            SimulationScenario::UnknownLabel => {
+                "La etiqueta desconocida se rechazó y quedó asociada a una alerta revisable."
+            }
+            SimulationScenario::InvalidLocation => {
+                "La ubicación inválida se rechazó y quedó asociada a una alerta revisable."
+            }
+            SimulationScenario::OccupiedDestination => {
+                "El destino ocupado se rechazó y quedó asociado a una alerta revisable."
+            }
+        }
+        .to_owned();
+
+        Ok(SimulationResponse {
+            seed,
+            scenario,
+            steps,
+            summary,
+        })
+    }
+
+    async fn ensure_catalog(
+        &self,
+        run: &SimulationRunContext,
+    ) -> Result<SimulationCatalog, ApplicationError> {
+        let prefix = run.prefix();
+        let sku = format!("SIM.{:016X}", run.seed_hash);
+        let product = GetProduct::new(self.repository.clone())
+            .execute(&sku)
+            .await?;
+        match product {
+            Some(product)
+                if product.description != SIMULATED_PRODUCT_DESCRIPTION
+                    || product.unit_of_measure != SIMULATED_PRODUCT_UNIT =>
+            {
+                return Err(RepositoryError::Conflict.into());
+            }
+            Some(product) if product.active => {}
+            Some(_) => return Err(RepositoryError::InactiveProduct.into()),
+            None => {
+                CreateProduct::new(self.repository.clone())
+                    .execute(&sku, SIMULATED_PRODUCT_DESCRIPTION, SIMULATED_PRODUCT_UNIT)
+                    .await?;
+            }
+        }
+
+        let zone_id = format!("{prefix}-zone");
+        let aisle_id = format!("{prefix}-aisle");
+        let rack_id = format!("{prefix}-rack");
+        let first_position_id = format!("{prefix}-position-a");
+        let second_position_id = format!("{prefix}-position-b");
+        self.ensure_location(
+            &zone_id,
+            &format!("SZ{:016X}", run.seed_hash),
+            "Zona sintética",
+            LocationKind::Zone,
+            None,
+        )
+        .await?;
+        self.ensure_location(
+            &aisle_id,
+            &format!("SA{:016X}", run.seed_hash),
+            "Pasillo sintético",
+            LocationKind::Aisle,
+            Some(&zone_id),
+        )
+        .await?;
+        self.ensure_location(
+            &rack_id,
+            &format!("SR{:016X}", run.seed_hash),
+            "Rack sintético",
+            LocationKind::Rack,
+            Some(&aisle_id),
+        )
+        .await?;
+        self.ensure_location(
+            &first_position_id,
+            &format!("SP{:016X}A", run.seed_hash),
+            "Posición sintética A",
+            LocationKind::Position,
+            Some(&rack_id),
+        )
+        .await?;
+        self.ensure_location(
+            &second_position_id,
+            &format!("SP{:016X}B", run.seed_hash),
+            "Posición sintética B",
+            LocationKind::Position,
+            Some(&rack_id),
+        )
+        .await?;
+
+        Ok(SimulationCatalog {
+            sku,
+            rack_id,
+            first_position_id,
+            second_position_id,
+        })
+    }
+
+    async fn ensure_location(
+        &self,
+        id: &str,
+        code: &str,
+        name: &str,
+        kind: LocationKind,
+        parent_id: Option<&str>,
+    ) -> Result<(), ApplicationError> {
+        match GetLocation::new(self.repository.clone())
+            .execute(id)
+            .await?
+        {
+            Some(location)
+                if location.active
+                    && location.kind == kind
+                    && location.code == code
+                    && location.name == name
+                    && location.parent_id.as_deref() == parent_id =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(RepositoryError::Conflict.into()),
+            None => {
+                CreateLocation::new(self.repository.clone())
+                    .execute(id, code, name, kind, parent_id)
+                    .await?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn run_normal(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+    ) -> Result<Vec<SimulationStep>, ApplicationError> {
+        let unit_id = run.id("normal-unit");
+        let label = run.label("NORMAL");
+        let mut steps = Vec::new();
+        steps.push(
+            self.receive_step(run, catalog, "normal-receive", &unit_id, &label, 1)
+                .await?,
+        );
+        steps.push(
+            self.store_step(run, "normal-store", &unit_id, &catalog.first_position_id, 2)
+                .await?,
+        );
+        steps.push(
+            self.move_step(
+                run,
+                "normal-move",
+                &unit_id,
+                &catalog.first_position_id,
+                &catalog.second_position_id,
+                3,
+            )
+            .await?,
+        );
+        steps.push(
+            self.dispatch_step(
+                run,
+                "normal-dispatch",
+                &unit_id,
+                &catalog.second_position_id,
+                4,
+            )
+            .await?,
+        );
+        Ok(steps)
+    }
+
+    async fn run_duplicate(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+    ) -> Result<Vec<SimulationStep>, ApplicationError> {
+        let unit_id = run.id("duplicate-unit");
+        let label = run.label("DUPLICATE");
+        let mut steps = Vec::new();
+        steps.push(
+            self.receive_step(run, catalog, "duplicate-receive", &unit_id, &label, 1)
+                .await?,
+        );
+        steps.push(
+            self.store_step(
+                run,
+                "duplicate-store",
+                &unit_id,
+                &catalog.first_position_id,
+                2,
+            )
+            .await?,
+        );
+        let event_id = run.id("duplicate-move");
+        let first = MoveUnit::new(self.repository.clone())
+            .execute(
+                &event_id,
+                &unit_id,
+                &catalog.first_position_id,
+                &catalog.second_position_id,
+                run.time(3),
+                "simulator",
+            )
+            .await?;
+        steps.push(step_from_event_outcome(
+            "duplicate-first",
+            "Primer traslado",
+            &event_id,
+            &unit_id,
+            first,
+        ));
+        let intent = run.alert_intent("duplicate", "Lectura duplicada", run.time(4))?;
+        let duplicate = MoveUnit::new(self.repository.clone())
+            .execute_with_alert(
+                &event_id,
+                &unit_id,
+                &catalog.first_position_id,
+                &catalog.second_position_id,
+                run.time(3),
+                "simulator",
+                &intent,
+            )
+            .await?;
+        steps.push(step_from_record_outcome(
+            "duplicate-retry",
+            "Reintento duplicado",
+            &event_id,
+            &unit_id,
+            duplicate,
+        ));
+        Ok(steps)
+    }
+
+    async fn run_unknown_label(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+    ) -> Result<Vec<SimulationStep>, ApplicationError> {
+        let unknown_ref = run.id("unknown-label");
+        let event_id = run.id("unknown-label-read");
+        let intent = run.alert_intent("unknown-label", "Etiqueta desconocida", run.time(1))?;
+        let result = StoreUnit::new(self.repository.clone())
+            .execute_with_alert(
+                &event_id,
+                &unknown_ref,
+                &catalog.first_position_id,
+                run.time(1),
+                "simulator",
+                &intent,
+            )
+            .await?;
+        Ok(vec![step_from_record_outcome(
+            "unknown-label",
+            "Lectura de etiqueta desconocida",
+            &event_id,
+            &unknown_ref,
+            result,
+        )])
+    }
+
+    async fn run_invalid_location(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+    ) -> Result<Vec<SimulationStep>, ApplicationError> {
+        let unit_id = run.id("invalid-location-unit");
+        let label = run.label("INVALID");
+        let mut steps = vec![
+            self.receive_step(
+                run,
+                catalog,
+                "invalid-location-receive",
+                &unit_id,
+                &label,
+                1,
+            )
+            .await?,
+        ];
+        let event_id = run.id("invalid-location-store");
+        let intent = run.alert_intent("invalid-location", "Posición inválida", run.time(2))?;
+        let result = StoreUnit::new(self.repository.clone())
+            .execute_with_alert(
+                &event_id,
+                &unit_id,
+                &catalog.rack_id,
+                run.time(2),
+                "simulator",
+                &intent,
+            )
+            .await?;
+        steps.push(step_from_record_outcome(
+            "invalid-location",
+            "Asignación a una ubicación que no es posición",
+            &event_id,
+            &unit_id,
+            result,
+        ));
+        Ok(steps)
+    }
+
+    async fn run_occupied_destination(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+    ) -> Result<Vec<SimulationStep>, ApplicationError> {
+        let blocker_id = run.id("occupied-blocker");
+        let blocker_label = run.label("BLOCKER");
+        let probe_id = run.id("occupied-probe");
+        let probe_label = run.label("PROBE");
+        let mut steps = vec![
+            self.receive_step(
+                run,
+                catalog,
+                "occupied-blocker-receive",
+                &blocker_id,
+                &blocker_label,
+                1,
+            )
+            .await?,
+            self.store_step(
+                run,
+                "occupied-blocker-store",
+                &blocker_id,
+                &catalog.first_position_id,
+                2,
+            )
+            .await?,
+            self.receive_step(
+                run,
+                catalog,
+                "occupied-probe-receive",
+                &probe_id,
+                &probe_label,
+                3,
+            )
+            .await?,
+        ];
+        let event_id = run.id("occupied-probe-store");
+        let intent = run.alert_intent("occupied-destination", "Destino ocupado", run.time(4))?;
+        let result = StoreUnit::new(self.repository.clone())
+            .execute_with_alert(
+                &event_id,
+                &probe_id,
+                &catalog.first_position_id,
+                run.time(4),
+                "simulator",
+                &intent,
+            )
+            .await?;
+        steps.push(step_from_record_outcome(
+            "occupied-destination",
+            "Asignación a un destino ocupado",
+            &event_id,
+            &probe_id,
+            result,
+        ));
+        Ok(steps)
+    }
+
+    async fn receive_step(
+        &self,
+        run: &SimulationRunContext,
+        catalog: &SimulationCatalog,
+        step_id: &str,
+        unit_id: &str,
+        label: &str,
+        time_offset: i64,
+    ) -> Result<SimulationStep, ApplicationError> {
+        let event_id = run.id(step_id);
+        let outcome = ReceiveUnit::new(self.repository.clone())
+            .execute(
+                unit_id,
+                label,
+                vec![ReceiveLine {
+                    sku: catalog.sku.clone(),
+                    quantity: 4,
+                    lot_code: Some("SIM-LOT".to_owned()),
+                }],
+                &event_id,
+                run.time(time_offset),
+                "simulator",
+            )
+            .await?;
+        Ok(step_from_event_outcome(
+            step_id,
+            "Recepción",
+            &event_id,
+            unit_id,
+            outcome,
+        ))
+    }
+
+    async fn store_step(
+        &self,
+        run: &SimulationRunContext,
+        step_id: &str,
+        unit_id: &str,
+        destination: &str,
+        time_offset: i64,
+    ) -> Result<SimulationStep, ApplicationError> {
+        let event_id = run.id(step_id);
+        let outcome = StoreUnit::new(self.repository.clone())
+            .execute(
+                &event_id,
+                unit_id,
+                destination,
+                run.time(time_offset),
+                "simulator",
+            )
+            .await?;
+        Ok(step_from_event_outcome(
+            step_id,
+            "Asignación inicial",
+            &event_id,
+            unit_id,
+            outcome,
+        ))
+    }
+
+    async fn move_step(
+        &self,
+        run: &SimulationRunContext,
+        step_id: &str,
+        unit_id: &str,
+        origin: &str,
+        destination: &str,
+        time_offset: i64,
+    ) -> Result<SimulationStep, ApplicationError> {
+        let event_id = run.id(step_id);
+        let outcome = MoveUnit::new(self.repository.clone())
+            .execute(
+                &event_id,
+                unit_id,
+                origin,
+                destination,
+                run.time(time_offset),
+                "simulator",
+            )
+            .await?;
+        Ok(step_from_event_outcome(
+            step_id, "Traslado", &event_id, unit_id, outcome,
+        ))
+    }
+
+    async fn dispatch_step(
+        &self,
+        run: &SimulationRunContext,
+        step_id: &str,
+        unit_id: &str,
+        origin: &str,
+        time_offset: i64,
+    ) -> Result<SimulationStep, ApplicationError> {
+        let event_id = run.id(step_id);
+        let outcome = DispatchUnit::new(self.repository.clone())
+            .execute(
+                &event_id,
+                unit_id,
+                origin,
+                run.time(time_offset),
+                "simulator",
+            )
+            .await?;
+        Ok(step_from_event_outcome(
+            step_id, "Despacho", &event_id, unit_id, outcome,
+        ))
+    }
+}
+
+struct SimulationRunContext {
+    seed_hash: u64,
+    base_time_ms: i64,
+}
+
+impl SimulationRunContext {
+    fn prefix(&self) -> String {
+        format!("sim-{:016x}", self.seed_hash)
+    }
+
+    fn id(&self, suffix: &str) -> String {
+        format!("{}-{suffix}", self.prefix())
+    }
+
+    fn label(&self, suffix: &str) -> String {
+        format!("SIM-{:016X}-{suffix}", self.seed_hash)
+    }
+
+    fn time(&self, offset: i64) -> i64 {
+        self.base_time_ms + offset
+    }
+
+    fn alert_intent(
+        &self,
+        suffix: &str,
+        kind: &str,
+        created_at_ms: i64,
+    ) -> Result<AlertIntent, DomainError> {
+        AlertIntent::new(self.id(&format!("alert-{suffix}")), kind, created_at_ms)
+    }
+}
+
+struct SimulationCatalog {
+    sku: String,
+    rack_id: String,
+    first_position_id: String,
+    second_position_id: String,
+}
+
+fn stable_seed_hash(seed: &str) -> u64 {
+    seed.bytes().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+fn step_from_event_outcome(
+    id: &str,
+    label: &str,
+    event_id: &str,
+    handling_unit_id: &str,
+    outcome: EventOutcome,
+) -> SimulationStep {
+    let (result, message, record_id) = match outcome {
+        EventOutcome::Applied => (
+            "applied",
+            "El movimiento fue aplicado y persistido.",
+            Some(event_id.to_owned()),
+        ),
+        EventOutcome::Duplicate => (
+            "duplicate",
+            "El evento ya estaba registrado; no se repitieron sus efectos.",
+            None,
+        ),
+    };
+    SimulationStep {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        result: result.to_owned(),
+        message: message.to_owned(),
+        record_id,
+        event_id: Some(event_id.to_owned()),
+        handling_unit_id: Some(handling_unit_id.to_owned()),
+        alert_id: None,
+    }
+}
+
+fn step_from_record_outcome(
+    id: &str,
+    label: &str,
+    event_id: &str,
+    handling_unit_id: &str,
+    outcome: MovementRecordOutcome,
+) -> SimulationStep {
+    let (result, message) = match outcome.result {
+        MovementRecordResult::Applied => ("applied", "El movimiento fue aplicado y persistido."),
+        MovementRecordResult::Duplicate => (
+            "duplicate",
+            "La lectura duplicada se registró sin repetir sus efectos.",
+        ),
+        MovementRecordResult::Rejected(error) => (
+            "rejected",
+            ApplicationError::Repository(error).user_message(),
+        ),
+    };
+    SimulationStep {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        result: result.to_owned(),
+        message: message.to_owned(),
+        record_id: Some(outcome.record_id),
+        event_id: Some(event_id.to_owned()),
+        handling_unit_id: Some(handling_unit_id.to_owned()),
+        alert_id: outcome.alert_id,
     }
 }
 

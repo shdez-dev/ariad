@@ -10,11 +10,13 @@ use thiserror::Error;
 
 use crate::{
     application::{
-        AlertEntry, EventOutcome, InventoryRepository, MovementHistoryEntry, RepositoryError,
+        AlertEntry, EventOutcome, InventoryRepository, MovementHistoryEntry, MovementRecordOutcome,
+        MovementRecordResult, RepositoryError,
     },
     domain::{
-        Alert, AlertStatus, HandlingUnit, HandlingUnitLine, HandlingUnitStatus, Location,
-        LocationKind, MovementCorrection, MovementEvent, MovementKind, Product, Sku,
+        Alert, AlertIntent, AlertRecordTarget, AlertStatus, HandlingUnit, HandlingUnitLine,
+        HandlingUnitStatus, Location, LocationKind, MovementCorrection, MovementEvent,
+        MovementKind, Product, Sku,
     },
 };
 
@@ -181,7 +183,7 @@ impl SqliteInventoryRepository {
         alert_id: Option<&str>,
     ) -> Result<Vec<AlertEntry>, RepositoryError> {
         let rows = sqlx::query_as::<_, AlertRow>(
-            "SELECT alert.id AS alert_id, alert.movement_event_id, alert.kind AS alert_kind, alert.status AS alert_status, alert.created_at_ms, event.handling_unit_id, unit.label AS handling_unit_label, event.kind AS event_kind, event.occurred_at_ms, origin.code AS origin_location_code, destination.code AS destination_location_code FROM alerts AS alert JOIN movement_events AS event ON event.event_id = alert.movement_event_id JOIN handling_units AS unit ON unit.id = event.handling_unit_id LEFT JOIN locations AS origin ON origin.id = event.origin_location_id LEFT JOIN locations AS destination ON destination.id = event.destination_location_id WHERE (? IS NULL OR alert.id = ?) ORDER BY CASE alert.status WHEN 'open' THEN 0 WHEN 'reviewed' THEN 1 ELSE 2 END, alert.created_at_ms DESC, alert.id",
+            "SELECT alert.id AS alert_id, alert.movement_event_id, alert.movement_attempt_id, alert.kind AS alert_kind, alert.status AS alert_status, alert.created_at_ms, COALESCE(event.event_id, attempt.event_id) AS event_id, COALESCE(event.handling_unit_id, attempt.handling_unit_id) AS handling_unit_id, unit.label AS handling_unit_label, COALESCE(event.kind, attempt.kind) AS event_kind, COALESCE(event.result, attempt.result) AS event_result, attempt.rejection_reason AS event_rejection_reason, COALESCE(event.source, attempt.source) AS source, COALESCE(event.occurred_at_ms, attempt.occurred_at_ms) AS occurred_at_ms, origin.code AS origin_location_code, destination.code AS destination_location_code FROM alerts AS alert LEFT JOIN movement_events AS event ON event.event_id = alert.movement_event_id LEFT JOIN movement_attempts AS attempt ON attempt.attempt_id = alert.movement_attempt_id LEFT JOIN handling_units AS unit ON unit.id = COALESCE(event.handling_unit_id, attempt.handling_unit_id) LEFT JOIN locations AS origin ON origin.id = COALESCE(event.origin_location_id, attempt.origin_location_id) LEFT JOIN locations AS destination ON destination.id = COALESCE(event.destination_location_id, attempt.destination_location_id) WHERE (? IS NULL OR alert.id = ?) ORDER BY CASE alert.status WHEN 'open' THEN 0 WHEN 'reviewed' THEN 1 ELSE 2 END, alert.created_at_ms DESC, alert.id",
         )
         .bind(alert_id)
         .bind(alert_id)
@@ -190,6 +192,196 @@ impl SqliteInventoryRepository {
         .map_err(map_repository_error)?;
 
         rows.into_iter().map(AlertEntry::try_from).collect()
+    }
+
+    async fn record_movement_transactional(
+        &self,
+        event: &MovementEvent,
+        alert_intent: Option<&AlertIntent>,
+    ) -> Result<MovementRecordOutcome, RepositoryError> {
+        let mut transaction = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(map_repository_error)?;
+
+        if let Some(previous_event) =
+            event_payload_for_id(&mut transaction, &event.event_id).await?
+        {
+            if movement_payload_matches(&previous_event, event) {
+                let outcome = record_attempt_and_alert(
+                    &mut transaction,
+                    event,
+                    "duplicate",
+                    None,
+                    alert_intent,
+                )
+                .await?;
+                transaction.commit().await.map_err(map_repository_error)?;
+                return Ok(outcome);
+            }
+            let outcome = record_attempt_and_alert(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_conflict"),
+                alert_intent,
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Ok(outcome);
+        }
+
+        if movement_attempt_exists(&mut transaction, &event.event_id).await? {
+            let outcome = record_attempt_and_alert(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("event_id_previously_rejected"),
+                alert_intent,
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Ok(outcome);
+        }
+
+        let current = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT status, current_location_id FROM handling_units WHERE id = ?",
+        )
+        .bind(&event.handling_unit_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_repository_error)?;
+        let Some(current) = current else {
+            let outcome = record_attempt_and_alert(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("handling_unit_not_found"),
+                alert_intent,
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Ok(outcome);
+        };
+
+        let current_status = match current.0.as_str() {
+            "received" => HandlingUnitStatus::Received,
+            "stored" => HandlingUnitStatus::Stored,
+            "dispatched" => HandlingUnitStatus::Dispatched,
+            _ => {
+                return Err(RepositoryError::Storage(
+                    "estado de unidad desconocido".into(),
+                ));
+            }
+        };
+        let (new_status, new_location_id) =
+            match transition_target(event, current_status, current.1.as_deref()) {
+                Ok(target) => target,
+                Err(error) => {
+                    let outcome = record_attempt_and_alert(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some("invalid_transition"),
+                        alert_intent,
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
+                    return Ok(outcome_with_error(outcome, error));
+                }
+            };
+
+        let update_result = sqlx::query(
+            "UPDATE handling_units SET status = ?, current_location_id = ?, updated_at_ms = ? WHERE id = ? AND status = ? AND current_location_id IS ?",
+        )
+        .bind(new_status.as_str())
+        .bind(new_location_id)
+        .bind(event.occurred_at_ms)
+        .bind(&event.handling_unit_id)
+        .bind(current.0)
+        .bind(current.1)
+        .execute(&mut *transaction)
+        .await;
+
+        let update = match update_result {
+            Ok(update) => update,
+            Err(error) => {
+                let repository_error = map_repository_error(error);
+                if matches!(
+                    &repository_error,
+                    RepositoryError::PositionOccupied
+                        | RepositoryError::InvalidDestination
+                        | RepositoryError::NotFound
+                ) {
+                    let outcome = record_attempt_and_alert(
+                        &mut transaction,
+                        event,
+                        "rejected",
+                        Some(event_attempt_reason(&repository_error)),
+                        alert_intent,
+                    )
+                    .await?;
+                    transaction.commit().await.map_err(map_repository_error)?;
+                    return Ok(outcome_with_error(outcome, repository_error));
+                }
+                let _ = transaction.rollback().await;
+                return Err(repository_error);
+            }
+        };
+
+        if update.rows_affected() != 1 {
+            let error = RepositoryError::InvalidTransition;
+            let outcome = record_attempt_and_alert(
+                &mut transaction,
+                event,
+                "rejected",
+                Some("invalid_transition"),
+                alert_intent,
+            )
+            .await?;
+            transaction.commit().await.map_err(map_repository_error)?;
+            return Ok(outcome_with_error(outcome, error));
+        }
+
+        let insert_result = sqlx::query(
+            "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?)",
+        )
+        .bind(&event.event_id)
+        .bind(&event.handling_unit_id)
+        .bind(event.kind.as_str())
+        .bind(&event.origin_location_id)
+        .bind(&event.destination_location_id)
+        .bind(event.occurred_at_ms)
+        .bind(&event.source)
+        .bind(now_ms())
+        .execute(&mut *transaction)
+        .await;
+
+        if let Err(error) = insert_result {
+            let _ = transaction.rollback().await;
+            return Err(map_repository_error(error));
+        }
+
+        let alert_id = match alert_intent {
+            Some(intent) => Some(
+                insert_alert_for_target(
+                    &mut transaction,
+                    intent,
+                    AlertRecordTarget::MovementEvent {
+                        event_id: event.event_id.clone(),
+                    },
+                )
+                .await?,
+            ),
+            None => None,
+        };
+        transaction.commit().await.map_err(map_repository_error)?;
+        Ok(MovementRecordOutcome {
+            result: MovementRecordResult::Applied,
+            record_id: event.event_id.clone(),
+            alert_id,
+        })
     }
 }
 
@@ -549,160 +741,21 @@ impl InventoryRepository for SqliteInventoryRepository {
         &self,
         event: &MovementEvent,
     ) -> Result<EventOutcome, RepositoryError> {
-        let mut transaction = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
+        let outcome = self.record_movement_transactional(event, None).await?;
+        match outcome.result {
+            MovementRecordResult::Applied => Ok(EventOutcome::Applied),
+            MovementRecordResult::Duplicate => Ok(EventOutcome::Duplicate),
+            MovementRecordResult::Rejected(error) => Err(error),
+        }
+    }
+
+    async fn record_movement_with_alert(
+        &self,
+        event: &MovementEvent,
+        intent: &AlertIntent,
+    ) -> Result<MovementRecordOutcome, RepositoryError> {
+        self.record_movement_transactional(event, Some(intent))
             .await
-            .map_err(map_repository_error)?;
-
-        if let Some(previous_event) =
-            event_payload_for_id(&mut transaction, &event.event_id).await?
-        {
-            if movement_payload_matches(&previous_event, event) {
-                record_event_attempt(&mut transaction, event, "duplicate", None).await?;
-                transaction.commit().await.map_err(map_repository_error)?;
-                return Ok(EventOutcome::Duplicate);
-            }
-            record_event_attempt(
-                &mut transaction,
-                event,
-                "rejected",
-                Some("event_id_conflict"),
-            )
-            .await?;
-            transaction.commit().await.map_err(map_repository_error)?;
-            return Err(RepositoryError::EventIdConflict);
-        }
-
-        if movement_attempt_exists(&mut transaction, &event.event_id).await? {
-            record_event_attempt(
-                &mut transaction,
-                event,
-                "rejected",
-                Some("event_id_previously_rejected"),
-            )
-            .await?;
-            transaction.commit().await.map_err(map_repository_error)?;
-            return Err(RepositoryError::EventIdConflict);
-        }
-
-        let current = sqlx::query_as::<_, (String, Option<String>)>(
-            "SELECT status, current_location_id FROM handling_units WHERE id = ?",
-        )
-        .bind(&event.handling_unit_id)
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(map_repository_error)?;
-        let Some(current) = current else {
-            record_event_attempt(
-                &mut transaction,
-                event,
-                "rejected",
-                Some("handling_unit_not_found"),
-            )
-            .await?;
-            transaction.commit().await.map_err(map_repository_error)?;
-            return Err(RepositoryError::NotFound);
-        };
-
-        let current_status = match current.0.as_str() {
-            "received" => HandlingUnitStatus::Received,
-            "stored" => HandlingUnitStatus::Stored,
-            "dispatched" => HandlingUnitStatus::Dispatched,
-            _ => {
-                return Err(RepositoryError::Storage(
-                    "estado de unidad desconocido".into(),
-                ));
-            }
-        };
-        let (new_status, new_location_id) =
-            match transition_target(event, current_status, current.1.as_deref()) {
-                Ok(target) => target,
-                Err(error) => {
-                    record_event_attempt(
-                        &mut transaction,
-                        event,
-                        "rejected",
-                        Some("invalid_transition"),
-                    )
-                    .await?;
-                    transaction.commit().await.map_err(map_repository_error)?;
-                    return Err(error);
-                }
-            };
-
-        let update_result = sqlx::query(
-            "UPDATE handling_units SET status = ?, current_location_id = ?, updated_at_ms = ? WHERE id = ? AND status = ? AND current_location_id IS ?",
-        )
-        .bind(new_status.as_str())
-        .bind(new_location_id)
-        .bind(event.occurred_at_ms)
-        .bind(&event.handling_unit_id)
-        .bind(current.0)
-        .bind(current.1)
-        .execute(&mut *transaction)
-        .await;
-
-        let update = match update_result {
-            Ok(update) => update,
-            Err(error) => {
-                let repository_error = map_repository_error(error);
-                if matches!(
-                    &repository_error,
-                    RepositoryError::PositionOccupied
-                        | RepositoryError::InvalidDestination
-                        | RepositoryError::NotFound
-                ) {
-                    record_event_attempt(
-                        &mut transaction,
-                        event,
-                        "rejected",
-                        Some(event_attempt_reason(&repository_error)),
-                    )
-                    .await?;
-                    transaction.commit().await.map_err(map_repository_error)?;
-                } else {
-                    let _ = transaction.rollback().await;
-                }
-                return Err(repository_error);
-            }
-        };
-        if update.rows_affected() != 1 {
-            record_event_attempt(
-                &mut transaction,
-                event,
-                "rejected",
-                Some("invalid_transition"),
-            )
-            .await?;
-            transaction.commit().await.map_err(map_repository_error)?;
-            return Err(RepositoryError::InvalidTransition);
-        }
-
-        let insert_result = sqlx::query(
-            "INSERT INTO movement_events (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?)",
-        )
-        .bind(&event.event_id)
-        .bind(&event.handling_unit_id)
-        .bind(event.kind.as_str())
-        .bind(&event.origin_location_id)
-        .bind(&event.destination_location_id)
-        .bind(event.occurred_at_ms)
-        .bind(&event.source)
-        .bind(now_ms())
-        .execute(&mut *transaction)
-        .await;
-
-        if let Err(error) = insert_result {
-            let _ = transaction.rollback().await;
-            return Err(map_repository_error(error));
-        }
-
-        transaction
-            .commit()
-            .await
-            .map(|()| EventOutcome::Applied)
-            .map_err(map_repository_error)
     }
 
     async fn record_correction(
@@ -852,13 +905,18 @@ impl InventoryRepository for SqliteInventoryRepository {
 #[derive(sqlx::FromRow)]
 struct AlertRow {
     alert_id: String,
-    movement_event_id: String,
+    movement_event_id: Option<String>,
+    movement_attempt_id: Option<i64>,
     alert_kind: String,
     alert_status: String,
     created_at_ms: i64,
+    event_id: String,
     handling_unit_id: String,
-    handling_unit_label: String,
+    handling_unit_label: Option<String>,
     event_kind: String,
+    event_result: String,
+    event_rejection_reason: Option<String>,
+    source: String,
     occurred_at_ms: i64,
     origin_location_code: Option<String>,
     destination_location_code: Option<String>,
@@ -878,9 +936,21 @@ impl TryFrom<AlertRow> for AlertEntry {
                 )));
             }
         };
+        let target = match (row.movement_event_id, row.movement_attempt_id) {
+            (Some(event_id), None) => AlertRecordTarget::MovementEvent { event_id },
+            (None, Some(attempt_id)) => AlertRecordTarget::MovementAttempt {
+                attempt_id,
+                event_id: row.event_id,
+            },
+            _ => {
+                return Err(RepositoryError::Storage(
+                    "referencia de alerta inválida".to_owned(),
+                ));
+            }
+        };
         let alert = Alert::from_persisted(
             row.alert_id,
-            row.movement_event_id,
+            target,
             row.alert_kind,
             row.created_at_ms,
             status,
@@ -891,6 +961,9 @@ impl TryFrom<AlertRow> for AlertEntry {
             handling_unit_id: row.handling_unit_id,
             handling_unit_label: row.handling_unit_label,
             event_kind: row.event_kind,
+            event_result: row.event_result,
+            event_rejection_reason: row.event_rejection_reason,
+            source: row.source,
             occurred_at_ms: row.occurred_at_ms,
             origin_location_code: row.origin_location_code,
             destination_location_code: row.destination_location_code,
@@ -978,8 +1051,8 @@ async fn record_event_attempt(
     event: &MovementEvent,
     result: &str,
     rejection_reason: Option<&str>,
-) -> Result<(), RepositoryError> {
-    sqlx::query(
+) -> Result<i64, RepositoryError> {
+    let recorded = sqlx::query(
         "INSERT INTO movement_attempts (event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source, result, rejection_reason, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&event.event_id)
@@ -995,7 +1068,88 @@ async fn record_event_attempt(
     .execute(&mut **transaction)
     .await
     .map_err(map_repository_error)?;
-    Ok(())
+    Ok(recorded.last_insert_rowid())
+}
+
+async fn record_attempt_and_alert(
+    transaction: &mut Transaction<'_, Sqlite>,
+    event: &MovementEvent,
+    attempt_result: &str,
+    rejection_reason: Option<&str>,
+    alert_intent: Option<&AlertIntent>,
+) -> Result<MovementRecordOutcome, RepositoryError> {
+    let attempt_id =
+        record_event_attempt(transaction, event, attempt_result, rejection_reason).await?;
+    let alert_id = match alert_intent {
+        Some(intent) => Some(
+            insert_alert_for_target(
+                transaction,
+                intent,
+                AlertRecordTarget::MovementAttempt {
+                    attempt_id,
+                    event_id: event.event_id.clone(),
+                },
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let result = if attempt_result == "duplicate" {
+        MovementRecordResult::Duplicate
+    } else {
+        MovementRecordResult::Rejected(repository_error_for_attempt(rejection_reason))
+    };
+    Ok(MovementRecordOutcome {
+        result,
+        record_id: format!("attempt:{attempt_id}"),
+        alert_id,
+    })
+}
+
+fn outcome_with_error(
+    mut outcome: MovementRecordOutcome,
+    error: RepositoryError,
+) -> MovementRecordOutcome {
+    outcome.result = MovementRecordResult::Rejected(error);
+    outcome
+}
+
+fn repository_error_for_attempt(reason: Option<&str>) -> RepositoryError {
+    match reason {
+        Some("event_id_conflict" | "event_id_previously_rejected") => {
+            RepositoryError::EventIdConflict
+        }
+        Some("handling_unit_not_found") | Some("location_not_found_or_invalid") => {
+            RepositoryError::NotFound
+        }
+        Some("invalid_destination") => RepositoryError::InvalidDestination,
+        Some("position_occupied") => RepositoryError::PositionOccupied,
+        Some("invalid_transition") => RepositoryError::InvalidTransition,
+        Some("product_not_found") => RepositoryError::NotFound,
+        Some("product_inactive") => RepositoryError::InactiveProduct,
+        _ => RepositoryError::InvalidTransition,
+    }
+}
+
+async fn insert_alert_for_target(
+    transaction: &mut Transaction<'_, Sqlite>,
+    intent: &AlertIntent,
+    target: AlertRecordTarget,
+) -> Result<String, RepositoryError> {
+    let alert = Alert::from_intent(intent, target)
+        .map_err(|error| RepositoryError::Storage(error.to_string()))?;
+    sqlx::query(
+        "INSERT INTO alerts (id, movement_event_id, movement_attempt_id, kind, created_at_ms) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&alert.id)
+    .bind(alert.target.movement_event_id())
+    .bind(alert.target.movement_attempt_id())
+    .bind(&alert.kind)
+    .bind(alert.created_at_ms)
+    .execute(&mut **transaction)
+    .await
+    .map_err(map_repository_error)?;
+    Ok(alert.id)
 }
 
 fn event_attempt_reason(error: &RepositoryError) -> &'static str {
@@ -1157,7 +1311,8 @@ mod tests {
         EventOutcome, GetHandlingUnit, GetLocation, GetMovementHistory, GetProduct,
         InventoryRepository, InventorySearchKind, ListAlerts, ListHandlingUnits, ListLocations,
         ListProducts, MarkAlertReviewed, MoveUnit, ReceiveLine, ReceiveUnit, RecordCorrection,
-        SearchInventory, StoreUnit, UpdateLocation, UpdateProduct,
+        RunSimulation, SearchInventory, SimulationScenario, StoreUnit, UpdateLocation,
+        UpdateProduct,
     };
     use crate::domain::{AlertStatus, MovementKind, Sku};
     use std::sync::Arc;
@@ -2013,7 +2168,7 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
 
         let product = Product::new("sku-1", "Caja", "unidad").unwrap();
         let repository = SqliteInventoryRepository::new(&database);
@@ -3286,7 +3441,7 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(product_count, 1);
-        assert_eq!(migration_count, 2);
+        assert_eq!(migration_count, 3);
 
         copied.close().await;
         std::fs::remove_dir_all(directory).unwrap();
@@ -3394,8 +3549,14 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].alert.status, AlertStatus::Open);
         assert_eq!(listed[0].handling_unit_id, "unit-alert");
-        assert_eq!(listed[0].handling_unit_label, "PALLET-ALERT");
-        assert_eq!(listed[0].alert.movement_event_id, "event-alert");
+        assert_eq!(
+            listed[0].handling_unit_label.as_deref(),
+            Some("PALLET-ALERT")
+        );
+        assert_eq!(
+            listed[0].alert.target.movement_event_id(),
+            Some("event-alert")
+        );
 
         let review = MarkAlertReviewed::new(repository.clone());
         let reviewed = review.execute(" alert-1 ").await.unwrap();
@@ -3427,6 +3588,582 @@ mod tests {
             ))
         ));
         database.close().await;
+    }
+
+    #[tokio::test]
+    async fn simulator_scenarios_use_cases_and_alert_exact_attempt_records() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        let simulator = RunSimulation::new(repository.clone());
+
+        let normal = simulator
+            .execute("seed-normal", SimulationScenario::Normal)
+            .await
+            .unwrap();
+        assert_eq!(normal.steps.len(), 4);
+        assert!(normal.steps.iter().all(|step| step.result == "applied"));
+        assert!(normal.steps.iter().all(|step| step.alert_id.is_none()));
+        assert!(
+            ListAlerts::new(repository.clone())
+                .execute()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let duplicate = simulator
+            .execute("seed-duplicate", SimulationScenario::Duplicate)
+            .await
+            .unwrap();
+        assert_eq!(duplicate.steps.len(), 4);
+        assert_eq!(duplicate.steps[2].result, "applied");
+        assert_eq!(duplicate.steps[3].result, "duplicate");
+        assert_ne!(duplicate.steps[2].record_id, duplicate.steps[3].record_id);
+
+        let unknown = simulator
+            .execute("seed-unknown", SimulationScenario::UnknownLabel)
+            .await
+            .unwrap();
+        let invalid = simulator
+            .execute("seed-invalid", SimulationScenario::InvalidLocation)
+            .await
+            .unwrap();
+        let occupied = simulator
+            .execute("seed-occupied", SimulationScenario::OccupiedDestination)
+            .await
+            .unwrap();
+
+        let alerts = ListAlerts::new(repository.clone()).execute().await.unwrap();
+        assert_eq!(alerts.len(), 4);
+        let cases = [
+            (&duplicate.steps[3], "duplicate", None, true),
+            (
+                &unknown.steps[0],
+                "rejected",
+                Some("handling_unit_not_found"),
+                false,
+            ),
+            (
+                &invalid.steps[1],
+                "rejected",
+                Some("invalid_destination"),
+                false,
+            ),
+            (
+                &occupied.steps[3],
+                "rejected",
+                Some("position_occupied"),
+                false,
+            ),
+        ];
+
+        for (step, expected_result, expected_reason, is_duplicate) in cases {
+            assert_eq!(step.result, expected_result);
+            let record_id = step.record_id.as_deref().expect("intento con recordId");
+            let attempt_id = record_id
+                .strip_prefix("attempt:")
+                .expect("recordId debe distinguir el intento")
+                .parse::<i64>()
+                .unwrap();
+            let alert_id = step.alert_id.as_deref().expect("alerta persistida");
+            let attempt = sqlx::query_as::<_, (String, String, String, Option<String>, String)>(
+                "SELECT event_id, handling_unit_id, result, rejection_reason, source FROM movement_attempts WHERE attempt_id = ?",
+            )
+            .bind(attempt_id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+            assert_eq!(attempt.0, step.event_id.as_deref().unwrap());
+            assert_eq!(attempt.1, step.handling_unit_id.as_deref().unwrap());
+            assert_eq!(attempt.2, expected_result);
+            assert_eq!(attempt.3.as_deref(), expected_reason);
+            assert_eq!(attempt.4, "simulator");
+
+            let alert = alerts
+                .iter()
+                .find(|alert| alert.alert.id == alert_id)
+                .expect("alerta listada");
+            assert_eq!(alert.alert.target.record_id(), record_id);
+            assert_eq!(
+                alert.alert.target.event_id(),
+                step.event_id.as_deref().unwrap()
+            );
+            assert_eq!(alert.event_result, expected_result);
+            assert_eq!(alert.event_rejection_reason.as_deref(), expected_reason);
+            assert_eq!(alert.source, "simulator");
+            assert_eq!(alert.handling_unit_id, attempt.1);
+            assert_eq!(
+                alert.handling_unit_label.is_none(),
+                alert.handling_unit_id.contains("unknown-label")
+            );
+            assert!(matches!(
+                alert.alert.target,
+                AlertRecordTarget::MovementAttempt { attempt_id: linked_id, .. } if linked_id == attempt_id
+            ));
+            if is_duplicate {
+                assert_eq!(expected_reason, None);
+                let accepted_count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM movement_events WHERE event_id = ?")
+                        .bind(step.event_id.as_deref().unwrap())
+                        .fetch_one(database.pool())
+                        .await
+                        .unwrap();
+                assert_eq!(accepted_count, 1);
+            }
+
+            let history = repository.list_movement_history(&attempt.1).await.unwrap();
+            assert!(history.iter().any(|entry| entry.record_id == record_id));
+        }
+
+        assert!(
+            unknown.steps[0]
+                .handling_unit_id
+                .as_deref()
+                .unwrap()
+                .contains("unknown-label")
+        );
+        let unknown_alert = alerts
+            .iter()
+            .find(|alert| alert.alert.id == unknown.steps[0].alert_id.as_deref().unwrap())
+            .unwrap();
+        assert_eq!(unknown_alert.handling_unit_label, None);
+
+        let normal_unit = normal.steps[0].handling_unit_id.as_deref().unwrap();
+        let normal_state: (String, Option<String>) =
+            sqlx::query_as("SELECT status, current_location_id FROM handling_units WHERE id = ?")
+                .bind(normal_unit)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(normal_state, ("dispatched".to_owned(), None));
+
+        let invalid_unit = invalid.steps[0].handling_unit_id.as_deref().unwrap();
+        let invalid_state: (String, Option<String>) =
+            sqlx::query_as("SELECT status, current_location_id FROM handling_units WHERE id = ?")
+                .bind(invalid_unit)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(invalid_state, ("received".to_owned(), None));
+
+        let occupied_probe = occupied.steps[2].handling_unit_id.as_deref().unwrap();
+        let occupied_state: (String, Option<String>) =
+            sqlx::query_as("SELECT status, current_location_id FROM handling_units WHERE id = ?")
+                .bind(occupied_probe)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(occupied_state, ("received".to_owned(), None));
+
+        let duplicate_move = duplicate.steps[2].event_id.as_deref().unwrap();
+        let duplicate_events: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM movement_events WHERE event_id = ?")
+                .bind(duplicate_move)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(duplicate_events, 1);
+
+        let reviewed_id = duplicate.steps[3].alert_id.as_deref().unwrap();
+        let reviewer = MarkAlertReviewed::new(repository.clone());
+        assert_eq!(
+            reviewer.execute(reviewed_id).await.unwrap().alert.status,
+            AlertStatus::Reviewed
+        );
+        assert_eq!(
+            reviewer.execute(reviewed_id).await.unwrap().alert.status,
+            AlertStatus::Reviewed
+        );
+
+        let rerun = simulator
+            .execute("seed-duplicate", SimulationScenario::Duplicate)
+            .await
+            .unwrap();
+        assert_eq!(rerun.steps[2].event_id, duplicate.steps[2].event_id);
+        assert_eq!(rerun.steps[3].result, "duplicate");
+        let unchanged: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM movement_events WHERE event_id = ?")
+                .bind(duplicate_move)
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(unchanged, 1);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn simulator_anomaly_reruns_create_distinct_exact_attempt_alerts_without_moving_units() {
+        type EventSnapshotRow = (String, String, String, Option<String>, Option<String>, i64);
+
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        let simulator = RunSimulation::new(repository.clone());
+        let cases = [
+            ("rerun-duplicate", SimulationScenario::Duplicate, 3),
+            ("rerun-unknown", SimulationScenario::UnknownLabel, 0),
+            ("rerun-invalid", SimulationScenario::InvalidLocation, 1),
+            ("rerun-occupied", SimulationScenario::OccupiedDestination, 3),
+        ];
+        let mut first_runs = Vec::new();
+        for (seed, scenario, anomaly_index) in cases {
+            let response = simulator.execute(seed, scenario).await.unwrap();
+            let step = &response.steps[anomaly_index];
+            assert!(step.record_id.as_deref().unwrap().starts_with("attempt:"));
+            assert!(step.alert_id.is_some());
+            first_runs.push((seed, scenario, anomaly_index, response));
+        }
+
+        let events_before: Vec<EventSnapshotRow> =
+            sqlx::query_as("SELECT event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms FROM movement_events ORDER BY event_id")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+        let unit_states_before: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, status, current_location_id FROM handling_units ORDER BY id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+        let attempts_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_attempts")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+
+        for (seed, scenario, anomaly_index, first_response) in first_runs {
+            let first_step = &first_response.steps[anomaly_index];
+            let rerun = simulator.execute(seed, scenario).await.unwrap();
+            let step = &rerun.steps[anomaly_index];
+            assert_eq!(step.event_id, first_step.event_id, "{}", scenario.as_str());
+            assert_eq!(step.handling_unit_id, first_step.handling_unit_id);
+            assert!(matches!(step.result.as_str(), "duplicate" | "rejected"));
+            assert_ne!(step.record_id, first_step.record_id);
+            assert_ne!(step.alert_id, first_step.alert_id);
+
+            let record_id = step.record_id.as_deref().unwrap();
+            let attempt_id = record_id
+                .strip_prefix("attempt:")
+                .unwrap()
+                .parse::<i64>()
+                .unwrap();
+            let alert_id = step.alert_id.as_deref().unwrap();
+            let alert = ListAlerts::new(repository.clone())
+                .execute()
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|alert| alert.alert.id == alert_id)
+                .expect("la alerta del rerun debe existir");
+            assert_eq!(alert.alert.target.record_id(), record_id);
+            assert_eq!(alert.alert.target.movement_attempt_id(), Some(attempt_id));
+            assert_eq!(
+                alert.alert.target.event_id(),
+                step.event_id.as_deref().unwrap()
+            );
+            assert_eq!(alert.source, "simulator");
+            assert_eq!(alert.event_result, step.result);
+        }
+
+        let events_after: Vec<EventSnapshotRow> =
+            sqlx::query_as("SELECT event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms FROM movement_events ORDER BY event_id")
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+        let unit_states_after: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT id, status, current_location_id FROM handling_units ORDER BY id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+        let attempts_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM movement_attempts")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(events_after, events_before);
+        assert_eq!(unit_states_after, unit_states_before);
+        assert_eq!(attempts_after, attempts_before + 11);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn simulator_rejects_manual_collisions_with_reserved_sku_and_location_metadata() {
+        for (seed, description, unit_of_measure) in [
+            ("reserved-sku-description", "Producto manual", "unidad"),
+            ("reserved-sku-unit", "Producto sintético de Ariadna", "caja"),
+        ] {
+            let database = SqliteDatabase::in_memory().await.unwrap();
+            let repository = Arc::new(SqliteInventoryRepository::new(&database));
+            let hash = test_seed_hash(seed);
+            let sku = format!("SIM.{hash:016X}");
+            repository
+                .insert_product(&Product::new(&sku, description, unit_of_measure).unwrap())
+                .await
+                .unwrap();
+
+            let result = RunSimulation::new(repository.clone())
+                .execute(seed, SimulationScenario::Normal)
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::application::ApplicationError::Repository(
+                    RepositoryError::Conflict
+                ))
+            ));
+            let movement_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM movement_events WHERE source = 'simulator'",
+            )
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+            assert_eq!(movement_count, 0);
+            let location_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM locations")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+            assert_eq!(location_count, 0);
+            database.close().await;
+        }
+
+        for (seed, use_expected_code, name) in [
+            ("reserved-location-code", false, "Zona sintética"),
+            ("reserved-location-name", true, "Zona manual"),
+        ] {
+            let database = SqliteDatabase::in_memory().await.unwrap();
+            let repository = Arc::new(SqliteInventoryRepository::new(&database));
+            let hash = test_seed_hash(seed);
+            let prefix = format!("sim-{hash:016x}");
+            let expected_code = format!("SZ{hash:016X}");
+            let manual_code = if use_expected_code {
+                expected_code
+            } else {
+                "MANUAL-CODE".to_owned()
+            };
+            let zone = Location::new(
+                format!("{prefix}-zone"),
+                manual_code,
+                name,
+                LocationKind::Zone,
+                None,
+            )
+            .unwrap();
+            repository.insert_location(&zone).await.unwrap();
+
+            let result = RunSimulation::new(repository.clone())
+                .execute(seed, SimulationScenario::Normal)
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::application::ApplicationError::Repository(
+                    RepositoryError::Conflict
+                ))
+            ));
+            let movement_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM movement_events WHERE source = 'simulator'",
+            )
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+            assert_eq!(movement_count, 0);
+            database.close().await;
+        }
+    }
+
+    fn test_seed_hash(seed: &str) -> u64 {
+        seed.bytes().fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+    }
+
+    #[tokio::test]
+    async fn simulator_seed_reproduces_event_attempt_and_alert_payloads() {
+        for scenario in [
+            SimulationScenario::Normal,
+            SimulationScenario::Duplicate,
+            SimulationScenario::UnknownLabel,
+            SimulationScenario::InvalidLocation,
+            SimulationScenario::OccupiedDestination,
+        ] {
+            let left = simulation_snapshot("repeatable-seed", scenario).await;
+            let right = simulation_snapshot("repeatable-seed", scenario).await;
+            assert_eq!(left, right, "scenario {}", scenario.as_str());
+        }
+    }
+
+    async fn simulation_snapshot(
+        seed: &str,
+        scenario: SimulationScenario,
+    ) -> (
+        crate::application::SimulationResponse,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    ) {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        let response = RunSimulation::new(repository.clone())
+            .execute(seed, scenario)
+            .await
+            .unwrap();
+        let event_rows = sqlx::query_as::<_, (String, String, String, Option<String>, Option<String>, i64, String)>(
+            "SELECT event_id, handling_unit_id, kind, origin_location_id, destination_location_id, occurred_at_ms, source FROM movement_events WHERE source = 'simulator' ORDER BY occurred_at_ms, event_id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+        let attempt_rows = sqlx::query_as::<_, (i64, String, String, String, Option<String>, i64, String)>(
+            "SELECT attempt_id, event_id, handling_unit_id, result, rejection_reason, occurred_at_ms, source FROM movement_attempts WHERE source = 'simulator' ORDER BY attempt_id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+        let alert_rows = sqlx::query_as::<_, (String, Option<String>, Option<i64>, String, i64)>(
+            "SELECT id, movement_event_id, movement_attempt_id, kind, created_at_ms FROM alerts ORDER BY id",
+        )
+        .fetch_all(database.pool())
+        .await
+        .unwrap();
+        let snapshot = (
+            response,
+            event_rows.iter().map(|row| format!("{row:?}")).collect(),
+            attempt_rows.iter().map(|row| format!("{row:?}")).collect(),
+            alert_rows.iter().map(|row| format!("{row:?}")).collect(),
+        );
+        database.close().await;
+        snapshot
+    }
+
+    #[tokio::test]
+    async fn migration_0003_preserves_event_alerts_and_enforces_target_xor_and_foreign_keys() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("ariadna-migration-0003-{unique}"));
+        std::fs::create_dir_all(&directory).unwrap();
+        let migrations_path = directory.join("migrations");
+        std::fs::create_dir_all(&migrations_path).unwrap();
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        for name in ["0001_initial_inventory.sql", "0002_movement_history.sql"] {
+            std::fs::copy(source_path.join(name), migrations_path.join(name)).unwrap();
+        }
+
+        let options = SqliteConnectOptions::new()
+            .filename(":memory:")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate::Migrator::new(migrations_path.as_path())
+            .await
+            .unwrap()
+            .run(&pool)
+            .await
+            .unwrap();
+
+        let database = SqliteDatabase { pool: pool.clone() };
+        insert_location_tree(database.pool()).await;
+        let repository = SqliteInventoryRepository::new(&database);
+        repository
+            .insert_product(&Product::new("SKU-MIGRATION", "Caja", "unidad").unwrap())
+            .await
+            .unwrap();
+        let unit = HandlingUnit::new(
+            "unit-migration",
+            "PALLET-MIGRATION",
+            vec![HandlingUnitLine::new("SKU-MIGRATION", 1, None::<&str>).unwrap()],
+        )
+        .unwrap();
+        repository
+            .receive_unit(
+                &unit,
+                &movement(
+                    "event-migration",
+                    "unit-migration",
+                    MovementKind::Received,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO alerts (id, movement_event_id, kind, created_at_ms) VALUES ('legacy-alert', 'event-migration', 'legacy', 1800000000000)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        std::fs::copy(
+            source_path.join("0003_alert_record_target.sql"),
+            migrations_path.join("0003_alert_record_target.sql"),
+        )
+        .unwrap();
+        sqlx::migrate::Migrator::new(migrations_path.as_path())
+            .await
+            .unwrap()
+            .run(database.pool())
+            .await
+            .unwrap();
+
+        let legacy_alert = repository.list_alerts().await.unwrap().remove(0);
+        assert_eq!(legacy_alert.alert.id, "legacy-alert");
+        assert_eq!(
+            legacy_alert.alert.target.movement_event_id(),
+            Some("event-migration")
+        );
+        let migration_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM _sqlx_migrations WHERE success = 1")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(migration_count, 3);
+
+        sqlx::query("INSERT INTO movement_attempts (event_id, handling_unit_id, kind, occurred_at_ms, source, result, rejection_reason) VALUES ('attempt-migration', 'unknown-label', 'stored', 1800000000001, 'simulator', 'rejected', 'handling_unit_not_found')")
+            .execute(database.pool())
+            .await
+            .unwrap();
+        let attempt_id: i64 = sqlx::query_scalar(
+            "SELECT attempt_id FROM movement_attempts WHERE event_id = 'attempt-migration'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+
+        let no_target = sqlx::query(
+            "INSERT INTO alerts (id, kind, created_at_ms) VALUES ('no-target', 'invalid', 1800000000002)",
+        )
+        .execute(database.pool())
+        .await;
+        assert!(no_target.is_err());
+        let both_targets = sqlx::query(
+            "INSERT INTO alerts (id, movement_event_id, movement_attempt_id, kind, created_at_ms) VALUES ('both-targets', 'event-migration', ?, 'invalid', 1800000000002)",
+        )
+        .bind(attempt_id)
+        .execute(database.pool())
+        .await;
+        assert!(both_targets.is_err());
+        let bad_event_fk = sqlx::query(
+            "INSERT INTO alerts (id, movement_event_id, kind, created_at_ms) VALUES ('bad-event-fk', 'missing-event', 'invalid', 1800000000002)",
+        )
+        .execute(database.pool())
+        .await;
+        assert!(bad_event_fk.is_err());
+        let bad_attempt_fk = sqlx::query(
+            "INSERT INTO alerts (id, movement_attempt_id, kind, created_at_ms) VALUES ('bad-attempt-fk', ?, 'invalid', 1800000000002)",
+        )
+        .bind(attempt_id + 10)
+        .execute(database.pool())
+        .await;
+        assert!(bad_attempt_fk.is_err());
+        let fk_violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(database.pool())
+            .await
+            .unwrap();
+        assert!(fk_violations.is_empty());
+
+        database.close().await;
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc";
+import { isSimulatedSource } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -37,13 +38,17 @@ function dateLabel(timestamp: number): string {
   }).format(timestamp);
 }
 
-export function mountAlertsView(): { refresh: () => Promise<void> } {
+export function mountAlertsView(): {
+  refresh: () => Promise<void>;
+  focusAlert: (alertId: string) => void;
+} {
   const status = requiredElement<HTMLElement>("#alerts-status");
   const list = requiredElement<HTMLElement>("#alerts-list");
   const refreshButton = requiredElement<HTMLButtonElement>("#alerts-refresh");
   let alerts: AlertDto[] = [];
   let requestNumber = 0;
   let loadFailed = false;
+  let expandedRecordAlertId: string | null = null;
 
   function setStatus(message: string, kind: "neutral" | "success" | "error" = "neutral"): void {
     status.textContent = message;
@@ -60,7 +65,7 @@ export function mountAlertsView(): { refresh: () => Promise<void> } {
       const copy = document.createElement("p");
       copy.textContent = loadFailed
         ? "Revisa el mensaje de estado e inténtalo de nuevo."
-        : "Cuando existan alertas asociadas a movimientos, aparecerán aquí. La generación de escenarios de demostración se implementa en la siguiente etapa.";
+        : "Cuando una anomalía requiera revisión, aparecerá aquí. El Simulador permite crear escenarios sintéticos para demostración.";
       empty.append(title, copy);
       list.append(empty);
       return;
@@ -84,12 +89,27 @@ export function mountAlertsView(): { refresh: () => Promise<void> } {
       badge.className = `record-badge alert-status-${alert.status}`;
       badge.textContent = alertStatusLabel(alert.status);
       heading.append(identity, badge);
+      if (isSimulatedSource(alert.source)) {
+        const simulated = document.createElement("span");
+        simulated.className = "simulation-source-badge";
+        simulated.textContent = "Dato sintético";
+        heading.append(simulated);
+      }
 
       const metadata = document.createElement("dl");
       metadata.className = "detail-list alert-metadata";
-      appendDetailRow(metadata, "Unidad", `${alert.handlingUnitLabel} · ${alert.handlingUnitId}`);
+      appendDetailRow(metadata, "Unidad", alert.handlingUnitLabel
+        ? `${alert.handlingUnitLabel} · ${alert.handlingUnitId}`
+        : `Sin ficha registrada · ${alert.handlingUnitId ?? "sin identificador"}`);
       appendDetailRow(metadata, "Movimiento", `${eventKindLabel(alert.eventKind)} · ${dateLabel(alert.occurredAtMs)}`);
-      appendDetailRow(metadata, "Evento", alert.movementEventId);
+      appendDetailRow(metadata, "Registro exacto", alert.recordId);
+      appendDetailRow(metadata, "Evento", alert.movementEventId ?? alert.eventId);
+      if (alert.movementAttemptId !== undefined && alert.movementAttemptId !== null) {
+        appendDetailRow(metadata, "Intento", String(alert.movementAttemptId));
+      }
+      if (alert.targetKind) appendDetailRow(metadata, "Tipo de registro", alert.targetKind === "movement_attempt" ? "Intento de movimiento" : alert.targetKind === "movement_event" ? "Movimiento aceptado" : alert.targetKind);
+      appendDetailRow(metadata, "Resultado", alert.eventResult);
+      if (alert.eventRejectionReason) appendDetailRow(metadata, "Motivo", alert.eventRejectionReason);
       if (alert.originLocationCode) appendDetailRow(metadata, "Origen", alert.originLocationCode);
       if (alert.destinationLocationCode) appendDetailRow(metadata, "Destino", alert.destinationLocationCode);
 
@@ -102,13 +122,23 @@ export function mountAlertsView(): { refresh: () => Promise<void> } {
       openButton.textContent = "Abrir movimiento y cronología";
       openButton.setAttribute(
         "aria-label",
-        `Abrir movimiento ${eventKindLabel(alert.eventKind)} asociado a la alerta ${alert.kind} de la unidad ${alert.handlingUnitLabel}`,
+        `Abrir movimiento ${eventKindLabel(alert.eventKind)} asociado a la alerta ${alert.kind} de ${alert.handlingUnitLabel ?? "un intento sin unidad registrada"}`,
       );
       openButton.addEventListener("click", () => {
+        if (!alert.handlingUnitId) {
+          expandedRecordAlertId = expandedRecordAlertId === alert.id ? null : alert.id;
+          render();
+          const preview = [...list.querySelectorAll<HTMLElement>("[data-alert-record-preview]")]
+            .find((item) => item.dataset.alertRecordPreview === alert.id)
+            ?.querySelector<HTMLElement>("h3");
+          preview?.focus();
+          return;
+        }
         window.dispatchEvent(new CustomEvent("ariadna:open-unit", {
           detail: {
             handlingUnitId: alert.handlingUnitId,
-            movementEventId: alert.movementEventId,
+            recordId: alert.recordId || alert.movementEventId || undefined,
+            movementEventId: alert.movementEventId ?? undefined,
           },
         }));
       });
@@ -125,6 +155,26 @@ export function mountAlertsView(): { refresh: () => Promise<void> } {
       }
 
       card.append(heading, metadata, actions);
+      if (expandedRecordAlertId === alert.id) {
+        const preview = document.createElement("section");
+        preview.className = "alert-record-preview";
+        preview.dataset.alertRecordPreview = alert.id;
+        preview.setAttribute("aria-labelledby", `alert-record-title-${alert.id}`);
+        const previewTitle = document.createElement("h3");
+        previewTitle.id = `alert-record-title-${alert.id}`;
+        previewTitle.tabIndex = -1;
+        previewTitle.textContent = "Registro exacto sin ficha de unidad";
+        const record = document.createElement("p");
+        record.textContent = `Identificador: ${alert.recordId}`;
+        const target = document.createElement("p");
+        target.textContent = alert.movementAttemptId !== undefined && alert.movementAttemptId !== null
+          ? `Intento ${alert.movementAttemptId} · evento ${alert.eventId} · ${alert.targetKind ?? "anomalía"}`
+          : `Evento ${alert.movementEventId ?? alert.eventId} · ${alert.targetKind ?? "registro"}`;
+        const result = document.createElement("p");
+        result.textContent = `${alert.eventResult}${alert.eventRejectionReason ? ` · ${alert.eventRejectionReason}` : ""}`;
+        preview.append(previewTitle, record, target, result);
+        card.append(preview);
+      }
       list.append(card);
     }
   }
@@ -186,6 +236,20 @@ export function mountAlertsView(): { refresh: () => Promise<void> } {
     }
   }
 
+  function focusAlert(alertId: string): void {
+    const card = [...list.querySelectorAll<HTMLElement>("[data-alert-id]")]
+      .find((item) => item.dataset.alertId === alertId);
+    if (!card) {
+      setStatus("La alerta solicitada ya no está en la lista. Actualiza las alertas.", "error");
+      requiredElement<HTMLElement>("#alerts-title").focus();
+      return;
+    }
+    const target = card.querySelector<HTMLButtonElement>("[data-alert-action='open-event']")
+      ?? card.querySelector<HTMLButtonElement>("[data-alert-action='review']");
+    target?.focus();
+    card.scrollIntoView({ block: "nearest" });
+  }
+
   refreshButton.addEventListener("click", () => void refresh());
-  return { refresh };
+  return { refresh, focusAlert };
 }

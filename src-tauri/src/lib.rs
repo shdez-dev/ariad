@@ -40,6 +40,7 @@ pub fn run() {
             ipc::get_movement_history,
             ipc::list_alerts,
             ipc::mark_alert_reviewed,
+            ipc::run_simulation,
         ])
         .setup(|app| {
             let config = AppConfig::from_data_directory(app.path().app_data_dir()?)?;

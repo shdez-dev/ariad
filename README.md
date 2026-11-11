@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-10 proporcionó 17 comandos IPC tipados; ARD-13 agregó `store_unit` para registrar la asignación inicial. ARD-14 añade la búsqueda transversal, la cronología visible de movimientos y la consulta/revisión de alertas persistidas, para un total de 21 comandos. ARD-11 construye el mapa lógico desde las ubicaciones y unidades guardadas. ARD-12 incorpora formularios de catálogo y consulta de unidades. ARD-13 cubre recepción, asignación, traslado y despacho. La interfaz no infiere geometría ni usa hardware. Las anomalías simuladas y su eventual generación de alertas corresponden a ARD-15.
+ARD-10 proporcionó los comandos IPC de catálogo y movimientos; ARD-14 añadió búsqueda, historial y revisión de alertas. ARD-15 incorpora un simulador en proceso con semilla y escenarios reproducibles, persistidos mediante los mismos casos de uso y SQLite. Incluye recorrido normal, evento duplicado, etiqueta desconocida, ubicación inválida y destino ocupado. Las anomalías pueden crear alertas enlazadas al intento exacto. Todos los registros del simulador se identifican como sintéticos. No se usan robots ni lectores físicos.
 
 ## Requisitos del entorno
 
@@ -43,20 +43,20 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 
 - Rust estable y Tauri v2 para la aplicación de escritorio.
 - HTML, CSS y TypeScript empaquetados como recursos estáticos.
-- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y casos de uso para catálogo, ubicaciones, recepción, movimientos, despacho, búsqueda, consulta de unidades, historial y revisión de alertas.
-- SQLx 0.9 y SQLite local ejecutan migraciones versionadas al iniciar la aplicación. La carpeta que entrega `app.path().app_data_dir()` contiene `ariadna.sqlite3` y `logs/ariadna.log`.
+- El dominio no depende de Tauri ni de SQLite. La capa de aplicación define el puerto `InventoryRepository` y casos de uso para catálogo, ubicaciones, recepción, movimientos, despacho, búsqueda, consulta de unidades, historial, revisión de alertas y simulación.
+- SQLx 0.9 y SQLite local ejecutan migraciones versionadas al iniciar la aplicación. La migración 0003 permite que una alerta apunte, con clave foránea, a un evento aceptado o a un intento duplicado/rechazado, conservando las alertas existentes.
 - `src-tauri/src/ipc.rs` registra adaptadores delgados con Tauri v2. Usan DTO JSON `camelCase`, códigos de error estables y mensajes seguros; los detalles técnicos quedan en el log local.
 - `src/lib/ipc.ts` contiene las funciones tipadas `invoke` para el frontend. La fuente del evento la fija Rust; el frontend conserva el ID y la fecha UTC al reintentar la misma intención para respetar la idempotencia.
 - No hay API HTTP de negocio ni permisos generales de shell, filesystem o red habilitados.
-- El simulador y la interfaz deberán invocar los mismos casos de uso. El simulador no hablará por HTTP ni MQTT.
+- El simulador invoca los casos de uso de recepción, asignación, traslado y despacho; no tiene persistencia paralela y no habla por HTTP ni MQTT. Una misma semilla genera los mismos IDs de evento y tiempos. Las filas de intentos son append-only y cada ejecución de una anomalía puede añadir un intento y alerta nuevos.
 
 Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md) y la [matriz de trazabilidad](docs/trazabilidad.md).
 
 ## Trabajo siguiente
 
-1. Completar revisión de código, verificación final y publicar ARD-14 en GitHub.
-2. Cerrar la aceptación visual manual de ARD-11 a ARD-14 en la ventana Tauri.
-3. Continuar con ARD-15, el simulador determinista de escenarios.
+1. Completar pruebas y revisión final de ARD-15 y publicarla en GitHub.
+2. Cerrar la aceptación visual manual de ARD-11 a ARD-15 en la ventana Tauri.
+3. Continuar con ARD-16, diagnóstico local con correlación y rotación de registros.
 
 ## Verificación local
 
@@ -64,10 +64,11 @@ Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectur
 npm run build
 npm run test:map
 npm run test:catalog
+npm run test:simulator
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`. ARD-14 se implementa en `feat/ard-14-search-history-alerts`. La verificación en curso cubre búsqueda por SKU, etiqueta y ubicación, cronología completa y revisión idempotente de alertas. Las pruebas automatizadas no sustituyen la aceptación visual manual de las vistas Tauri.
+ARD-10 está publicada en `feat/ard-10-tauri-ipc`, commit `672159c`; ARD-11 en `feat/ard-11-location-map`, commit `23ac1ff`; ARD-12 en `feat/ard-12-catalog-units`, commit `37bea39`; ARD-13 en `feat/ard-13-operations`, commit `0e6d095`; ARD-14 en `feat/ard-14-search-history-alerts`, commit `a1925d2`. ARD-15 se desarrolla en `feat/ard-15-simulator`. La inspección visual manual de las vistas Tauri continúa pendiente; las pruebas automatizadas no la sustituyen.
 

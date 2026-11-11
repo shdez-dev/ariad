@@ -436,9 +436,86 @@ impl AlertStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AlertRecordTarget {
+    MovementEvent { event_id: String },
+    MovementAttempt { attempt_id: i64, event_id: String },
+}
+
+impl AlertRecordTarget {
+    pub fn record_id(&self) -> String {
+        match self {
+            Self::MovementEvent { event_id } => event_id.clone(),
+            Self::MovementAttempt { attempt_id, .. } => format!("attempt:{attempt_id}"),
+        }
+    }
+
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::MovementEvent { .. } => "movement_event",
+            Self::MovementAttempt { .. } => "movement_attempt",
+        }
+    }
+
+    pub fn event_id(&self) -> &str {
+        match self {
+            Self::MovementEvent { event_id } | Self::MovementAttempt { event_id, .. } => event_id,
+        }
+    }
+
+    pub fn movement_event_id(&self) -> Option<&str> {
+        match self {
+            Self::MovementEvent { event_id } => Some(event_id),
+            Self::MovementAttempt { .. } => None,
+        }
+    }
+
+    pub const fn movement_attempt_id(&self) -> Option<i64> {
+        match self {
+            Self::MovementEvent { .. } => None,
+            Self::MovementAttempt { attempt_id, .. } => Some(*attempt_id),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AlertIntent {
+    pub id_prefix: String,
+    pub kind: String,
+    pub created_at_ms: i64,
+}
+
+impl AlertIntent {
+    pub fn new(
+        id_prefix: impl AsRef<str>,
+        kind: impl AsRef<str>,
+        created_at_ms: i64,
+    ) -> Result<Self, DomainError> {
+        if created_at_ms <= 0 {
+            return Err(DomainError::InvalidTimestamp);
+        }
+        Ok(Self {
+            id_prefix: required(id_prefix.as_ref(), "prefijo de alerta")?,
+            kind: required(kind.as_ref(), "tipo de alerta")?,
+            created_at_ms,
+        })
+    }
+
+    pub fn id_for_target(&self, target: &AlertRecordTarget) -> String {
+        match target {
+            AlertRecordTarget::MovementEvent { .. } => {
+                format!("{}-event", self.id_prefix)
+            }
+            AlertRecordTarget::MovementAttempt { attempt_id, .. } => {
+                format!("{}-attempt-{attempt_id}", self.id_prefix)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Alert {
     pub id: String,
-    pub movement_event_id: String,
+    pub target: AlertRecordTarget,
     pub kind: String,
     pub created_at_ms: i64,
     pub status: AlertStatus,
@@ -453,7 +530,9 @@ impl Alert {
     ) -> Result<Self, DomainError> {
         Self::from_persisted(
             id,
-            movement_event_id,
+            AlertRecordTarget::MovementEvent {
+                event_id: required(movement_event_id.as_ref(), "evento relacionado")?,
+            },
             kind,
             created_at_ms,
             AlertStatus::Open,
@@ -462,7 +541,7 @@ impl Alert {
 
     pub fn from_persisted(
         id: impl AsRef<str>,
-        movement_event_id: impl AsRef<str>,
+        target: AlertRecordTarget,
         kind: impl AsRef<str>,
         created_at_ms: i64,
         status: AlertStatus,
@@ -472,11 +551,24 @@ impl Alert {
         }
         Ok(Self {
             id: required(id.as_ref(), "identificador de alerta")?,
-            movement_event_id: required(movement_event_id.as_ref(), "evento relacionado")?,
+            target,
             kind: required(kind.as_ref(), "tipo de alerta")?,
             created_at_ms,
             status,
         })
+    }
+
+    pub fn from_intent(
+        intent: &AlertIntent,
+        target: AlertRecordTarget,
+    ) -> Result<Self, DomainError> {
+        Self::from_persisted(
+            intent.id_for_target(&target),
+            target,
+            &intent.kind,
+            intent.created_at_ms,
+            AlertStatus::Open,
+        )
     }
 }
 
