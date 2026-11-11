@@ -4,7 +4,7 @@ Prototipo local de escritorio para consultar inventario por ubicación e histori
 
 ## Estado
 
-ARD-10 proporcionó los comandos IPC de catálogo y movimientos; ARD-14 añadió búsqueda, historial y revisión de alertas. ARD-15 incorpora un simulador en proceso con semilla y escenarios reproducibles, persistidos mediante los mismos casos de uso y SQLite. ARD-16 añade registros JSON Lines correlacionados para inicio, cierre y comandos IPC, con duración, códigos de error seguros y rotación limitada. ARD-17 amplía las pruebas unitarias del dominio y ARD-18 añade cobertura de rollback y persistencia tras reabrir SQLite. ARD-19 limita los permisos de Tauri a 22 comandos, añade una CSP restrictiva y valida límites de búsqueda y recepción en Rust. ARD-20 configura CI en Windows para pruebas de frontend y Rust, formato, Clippy y compilación Tauri. ARD-21 incorpora un benchmark local reproducible y documenta latencias con datos sintéticos. ARD-22 genera un instalador NSIS sin firma y verifica en CI su instalación, inicio, base local y desinstalación. No se usan robots ni lectores físicos.
+ARD-10 proporcionó los comandos IPC de catálogo y movimientos; ARD-14 añadió búsqueda, historial y revisión de alertas. ARD-15 incorpora un simulador en proceso con semilla y escenarios reproducibles, persistidos mediante los mismos casos de uso y SQLite. ARD-16 añade registros JSON Lines correlacionados para inicio, cierre y comandos IPC, con duración, códigos de error seguros y rotación limitada. ARD-17 amplía las pruebas unitarias del dominio y ARD-18 añade cobertura de rollback y persistencia tras reabrir SQLite. ARD-19 limita los permisos de Tauri a 22 comandos, añade una CSP restrictiva y valida límites de búsqueda y recepción en Rust. ARD-20 configura CI en Windows para pruebas de frontend y Rust, formato, Clippy y compilación Tauri. ARD-21 incorpora un benchmark local reproducible y documenta latencias con datos sintéticos. ARD-22 se cerró con CI Windows 43107801858: el artefacto NSIS se instaló, inició dos veces, conservó la base y los logs y se desinstaló en un runner limpio; su hash y estado `NotSigned` se cotejaron manualmente. ARD-23 conserva respaldo/restauración en SQLite local, compatibilidad explícita con migraciones históricas y verificación CI. ARD-24 añade la guía de portfolio con capturas sintéticas. No se usan robots ni lectores físicos ni se ha validado una bodega real.
 
 ## Requisitos del entorno
 
@@ -59,12 +59,11 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 ## Trabajo siguiente
 
-1. Repetir la carga del artefacto de ARD-22, inspeccionar el instalador actual y cotejar su hash, informe y firma.
-2. Completar y registrar los criterios visuales pendientes de ARD-11 a ARD-15 en la ventana Tauri: teclado, CRUD/errores/estados vacíos, rechazos operativos y escenarios del simulador.
-3. Finalizar ARD-23: probar checkpoint y restauración en una base temporal, y publicar la guía operativa con sus límites explícitos.
-4. Revisar y cerrar ARD-24: [guía de instalación y demostración para portfolio](docs/portfolio/README.md); confirmar su revisión publicada y CI asociado.
-5. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
-6. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
+1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos teclado, CRUD, errores, estados vacíos y escenarios del simulador.
+2. Sincronizar ARD-23 con el documento **Guía de operación** de AETHER. Su editor MCP aún rechaza el cambio por bloques; la guía versionada en el repositorio y la matriz de trazabilidad están actualizadas.
+3. Cerrar ARD-24 enlazando en la guía de portfolio la verificación vigente y conservar su revisión actual.
+4. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
+5. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
 
 ## Verificación local
 
