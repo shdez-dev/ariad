@@ -59,11 +59,12 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 ## Trabajo siguiente
 
-1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos teclado, CRUD, errores, estados vacíos y escenarios del simulador.
+1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos teclado, CRUD, errores, estados vacíos y escenarios del simulador. La [matriz de trazabilidad](docs/trazabilidad.md) detalla los puntos abiertos.
 2. Sincronizar ARD-23 con el documento **Guía de operación** de AETHER. Su editor MCP aún rechaza el cambio por bloques; la guía versionada en el repositorio y la matriz de trazabilidad están actualizadas.
-3. Cerrar ARD-24 enlazando en la guía de portfolio la verificación vigente y conservar su revisión actual.
-4. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
-5. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
+3. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
+4. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
+
+ARD-24 quedó documentada en `docs/portfolio/README.md`, enlazada desde esta página y verificada por el CI Windows 43109513936.
 
 ## Verificación local
 
