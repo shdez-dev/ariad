@@ -73,7 +73,7 @@ Se hizo una ejecución adicional sobre la revisión `691104435059`, con la misma
 | Historial completo de unit-000000 | 0,247 | 0,389 | 101 | Cumple |
 | Movimiento SQLite de una unidad almacenada | 20,546 | 23,182 | 101 | Cumple |
 
-Cada operación tuvo 10 calentamientos previos. La medición cubre el caso de uso Rust y SQLite; excluye ventana, serialización IPC, renderizado y concurrencia. Es una repetición en un solo equipo, no una nueva línea base estadística ni una medición de bodega. Los tres p95 observados están por debajo de la meta provisional de 2.000 ms.
+La ejecución se compiló con perfil `release` mediante el comando reproducible indicado en este documento. Cada operación tuvo 10 calentamientos previos. La medición de movimiento añade 111 eventos aceptados a la base temporal luego de verificar la carga inicial de 10.000; no cambia el conteo que describe el conjunto sembrado. La medición cubre el caso de uso Rust y SQLite; excluye ventana, serialización IPC, renderizado y concurrencia. Es una repetición en un solo equipo, no una nueva línea base estadística ni una medición de bodega. Los tres p95 observados están por debajo de la meta provisional de 2.000 ms.
 
 ## Reproducir
 
