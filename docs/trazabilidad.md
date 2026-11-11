@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-20 tienen incrementos publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite, ARD-19 aporta controles de seguridad y validación, y ARD-20 valida el proyecto en CI sobre Windows.
+Estado: actualizada el 11 de noviembre de 2026. ARD-10 a ARD-21 tienen incrementos de implementación publicados; ARD-11 a ARD-15 siguen pendientes de aceptación visual manual. ARD-16 añade diagnósticos locales JSON Lines, ARD-17 amplía las pruebas unitarias de dominio, ARD-18 verifica atomicidad SQLite, ARD-19 aporta controles de seguridad y validación, ARD-20 valida CI sobre Windows y ARD-21 mide rendimiento con datos sintéticos.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -35,8 +35,8 @@ Estas decisiones concretan ADR-01 a ADR-07 y DEC-04 a DEC-08. Las versiones 0.2 
 
 | Requisito | Decisión o componente | Verificación y evidencia prevista |
 | --- | --- | --- |
-| RQ-01 Rendimiento local | Consultas SQLite acotadas e índices derivados de búsquedas reales | ARD-21: medir p50/p95 en el conjunto RQ-02 y registrar equipo, versión, volumen y método; meta p95 <= 2 s |
-| RQ-02 Capacidad de demostración | Datos sintéticos reproducibles: 500 unidades, 250 posiciones y 10.000 eventos | ARD-21: generar el conjunto, medir operaciones clave y revisar consistencia e historial; no es una garantía de producción |
+| RQ-01 Rendimiento local | Casos de uso Rust y repositorio SQLite local | ARD-21 mide búsqueda, historial y movimientos; tres repeticiones registran mediana p95 de 18,126 ms, 0,410 ms y 6,593 ms respectivamente. La mayor observación individual es 60,323 ms; el objetivo provisional de p95 <= 2 s se cumple en el escenario local. Véase `docs/performance/ard-21-baseline.md` |
+| RQ-02 Capacidad de demostración | Generador sintético reproducible con 500 unidades, 255 ubicaciones totales, 252 posiciones y 10.000 eventos aceptados | ARD-21 verifica conteos, estados, búsqueda e historial antes de medir. El conjunto es una carga controlada y no una garantía de producción |
 | RQ-03 Persistencia e integridad | Archivo SQLite, migraciones y transacciones para estado más historial | ARD-18: cerrar/reabrir la base y comparar estado; comprobar que un rechazo/fallo no deja cambios parciales |
 | RQ-04 Privacidad y seguridad básica | Datos sintéticos, validación Rust, SQL parametrizado y capacidades Tauri mínimas | ARD-19: capacidad limitada a 22 comandos, CSP local con IPC, entradas acotadas, consultas enlazadas y ausencia de API local o credenciales; evidencia en `docs/revision-seguridad-ARD-19.md` |
 | RQ-05 Accesibilidad básica | Etiquetas explícitas, estado no dependiente solo del color, foco visible y teclado | Revisión manual de formularios, mapa, búsqueda, alertas y flujos antes de la versión candidata |
@@ -66,9 +66,9 @@ ARD-17 añade pruebas unitarias para límites de productos, jerarquías y datos 
 
 ARD-18 añade pruebas de integración para rollback después de una escritura parcial de recepción y cuando falla la inserción de una alerta vinculada a un traslado. También cierra y reabre la misma base temporal y vuelve a consultar producto, unidad, líneas, ubicación, historial y alerta. Las pruebas existentes cubren migraciones en base limpia y actualización desde la versión anterior, restricciones relevantes e idempotencia de recepción y movimiento. En conjunto pasan 68 pruebas Rust; también pasan `cargo fmt --check` y `cargo clippy --all-targets -- -D warnings`. Publicada en `feat/ard-18-sqlite-integration-tests`, commit `7eadb23`.
 
-La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. ARD-19 completó la revisión de seguridad y capacidades de Tauri. ARD-20 configuró y verificó CI en Windows; el siguiente incremento técnico del backlog es ARD-21, medir capacidad y latencia objetivo.
+La aceptación visual manual de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes. ARD-19 completó la revisión de seguridad y capacidades de Tauri. ARD-20 configuró y verificó CI en Windows. ARD-21 registró una línea base local de capacidad y latencia; la evidencia y sus límites se describen más abajo.
 
-La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación de flujos completos, integración visual, medición de rendimiento y uso real en bodega siguen pendientes.
+La ventana inicial fue observada como evidencia de ARD-02. El perfil local existente presenta un checksum de migración distinto; se dejó intacto y se aisló la prueba de arranque con una base temporal limpia. La aceptación visual de los flujos de ARD-11 a ARD-15 y el uso real en bodega siguen pendientes.
 
 ## Evidencia de ARD-19
 
@@ -80,4 +80,12 @@ Verificación: pasan 71 pruebas Rust, `cargo fmt --check`, Clippy con `-D warnin
 
 ARD-20 configura el workflow `.github/workflows/ci.yml` para validar cada push y pull request en Windows. El run [42955336210](https://github.com/shdez-dev/ariad/actions/runs/42955336210) terminó con resultado `success` para `feat/ard-20-ci`, commit `202772a7a3026588494700b6a6908bfd1450160f`. Pasaron instalación con `npm ci`, compilación y las cuatro suites frontend, `cargo fmt --check`, Clippy, las pruebas Rust y `npm run tauri -- build --no-bundle`. El workflow usa permiso `contents: read` y no requiere secretos. La guía `docs/continuous-integration.md` registra los comandos equivalentes. Para que un check rojo impida integrar cambios, la protección de rama debe configurarse en GitHub con el check `CI / Windows`; esta regla remota no se modificó.
 
-ARD-20 está publicada en `feat/ard-20-ci`, commit `202772a`. El siguiente incremento técnico es ARD-21, medir búsqueda, historial y operaciones de movimiento con 500 unidades, 250 ubicaciones y 10.000 eventos sintéticos. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en una bodega siguen pendientes.
+ARD-20 está publicada en `feat/ard-20-ci`, commit `202772a`. ARD-21 completa la medición prevista para búsqueda, historial y movimientos con datos sintéticos. La aceptación visual manual de ARD-11 a ARD-15 y el uso real en una bodega siguen pendientes.
+
+## Evidencia de ARD-21
+
+ARD-21 añade `src-tauri/examples/ard21_benchmark.rs`, un ejecutable reproducible que crea una base SQLite temporal mediante los casos de uso de catálogo, recepción, almacenamiento, traslados y despacho. Genera 500 unidades, 255 ubicaciones totales (252 posiciones), 25 productos y 10.000 movimientos aceptados; valida los conteos, estados y cardinalidades de las consultas antes de medir. Ejecuta 10 calentamientos y 101 muestras por operación en `release`, en tres bases independientes. La búsqueda de `SKU-000` devuelve 21 resultados, el historial de `unit-000000` contiene 20 entradas y el movimiento alterna una unidad entre dos posiciones.
+
+En Windows 11 Pro x64, Intel Core i5-12450H, 8 núcleos/12 hilos, 31,8 GiB de memoria, Rust 1.99.1 y SQLite 3.51.3, la mediana p95 de las tres repeticiones fue: búsqueda 18,126 ms, historial 0,410 ms y movimiento 6,593 ms. Todos los p95 individuales quedaron bajo la meta provisional de 2 s; el mayor p95 observado fue 60,323 ms para movimientos. La variación local está documentada junto con el método y sus límites en `docs/performance/ard-21-baseline.md`.
+
+Verificación local: `cargo fmt --check`, Clippy con `-D warnings`, 71 pruebas Rust, la prueba del percentil del ejemplo y tres ejecuciones del benchmark en `release` pasaron. La prueba no incluye interfaz, serialización IPC, concurrencia ni uso real de bodega. Siguiente tarjeta técnica: ARD-22, preparar y comprobar el instalador de Windows. La aceptación visual manual de ARD-11 a ARD-15 sigue pendiente.

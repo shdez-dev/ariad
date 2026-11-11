@@ -66,5 +66,8 @@ jobs:
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Test performance benchmark
+        run: cargo test --manifest-path src-tauri/Cargo.toml --example ard21_benchmark
+
       - name: Build Tauri desktop executable
         run: npm run tauri -- build --no-bundle
