@@ -48,6 +48,9 @@ jobs:
       - name: Test map model
         run: npm run test:map
 
+      - name: Test operation refresh concurrency
+        run: npm run test:operations
+
       - name: Test catalog model
         run: npm run test:catalog
 

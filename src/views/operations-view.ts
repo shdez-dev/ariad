@@ -15,15 +15,16 @@ import {
   storedUnits,
   unitsAwaitingStorage,
 } from "../lib/catalog-model";
+import {
+  createLatestRefreshCoordinator,
+  type LatestRefreshResult,
+} from "../lib/latest-refresh-coordinator";
 
 const MAX_RECEIVE_LINES = 100;
 const MAX_LOT_CODE_LENGTH = 120;
 
 type OperationMode = "receive" | "store" | "move" | "dispatch";
-type RefreshResult =
-  | { kind: "loaded" }
-  | { kind: "failed"; message: string }
-  | { kind: "superseded" };
+type RefreshResult = LatestRefreshResult;
 
 type PendingIntent = {
   fingerprint: string;
@@ -153,7 +154,7 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
   let busy = false;
   let uncertainRetry: RetryRequest | null = null;
   let activeMode: OperationMode = "receive";
-  let refreshRequestNumber = 0;
+  const refreshCoordinator = createLatestRefreshCoordinator();
   const pendingIntents = new Map<OperationMode, PendingIntent>();
 
   function setStatus(text: string, kind: "success" | "error" | "neutral" = "neutral"): void {
@@ -431,35 +432,37 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
   }
 
   async function refreshData(announce = true): Promise<RefreshResult> {
-    const requestNumber = ++refreshRequestNumber;
     refreshButton.disabled = true;
     if (announce) setStatus("Consultando productos, unidades y ubicaciones…");
-    try {
-      const [nextProducts, nextUnits, nextLocations] = await Promise.all([
+    return refreshCoordinator.run(
+      () => Promise.all([
         inventoryIpc.listProducts(false),
         inventoryIpc.listHandlingUnits(true),
         inventoryIpc.listLocations(true),
-      ]);
-      if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
-      products = nextProducts.filter((product) => product.active);
-      units = nextUnits;
-      locations = nextLocations;
-      loadFailed = false;
-      refreshSelectors();
-      if (announce) {
-        setStatus(`${products.length} productos activos, ${units.length} unidades y ${locations.length} ubicaciones consultados.`);
-      }
-      return { kind: "loaded" };
-    } catch (error: unknown) {
-      if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
-      loadFailed = true;
-      updateAvailability();
-      const message = messageFor(error);
-      if (announce) setStatus(message, "error");
-      return { kind: "failed", message };
-    } finally {
-      if (requestNumber === refreshRequestNumber) refreshButton.disabled = busy;
-    }
+      ]),
+      {
+        onLoaded: ([nextProducts, nextUnits, nextLocations]) => {
+          products = nextProducts.filter((product) => product.active);
+          units = nextUnits;
+          locations = nextLocations;
+          loadFailed = false;
+          refreshSelectors();
+          if (announce) {
+            setStatus(`${products.length} productos activos, ${units.length} unidades y ${locations.length} ubicaciones consultados.`);
+          }
+        },
+        onError: (error) => {
+          loadFailed = true;
+          updateAvailability();
+          const message = messageFor(error);
+          if (announce) setStatus(message, "error");
+          return message;
+        },
+        onSettled: () => {
+          refreshButton.disabled = busy;
+        },
+      },
+    );
   }
 
   async function presentConfirmedMovement(
