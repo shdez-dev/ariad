@@ -488,6 +488,14 @@ export function mountUnitsView(): {
     const currentRefresh = ++refreshRequestNumber;
     requestNumber += 1;
     refreshButton.disabled = true;
+    refreshButton.setAttribute("aria-busy", "true");
+    detail.setAttribute("aria-busy", "true");
+    detail.replaceChildren();
+    const loading = document.createElement("p");
+    loading.className = "detail-muted";
+    loading.textContent = "Actualizando la lista de unidades…";
+    detail.append(loading);
+    detailAnnouncement.textContent = "Actualizando unidades. El detalle se mostrará cuando termine la consulta.";
     setStatus("Consultando unidades…");
     try {
       const [nextUnits, nextLocations] = await Promise.all([
@@ -505,7 +513,19 @@ export function mountUnitsView(): {
       else if (selectedUnitId) {
         selectedUnitId = null;
         detail.replaceChildren();
-        setStatus("La unidad seleccionada ya no está disponible en la lista.", "error");
+        const message = "La unidad seleccionada ya no está disponible en la lista.";
+        const unavailable = document.createElement("p");
+        unavailable.className = "detail-warning";
+        unavailable.textContent = message;
+        detail.append(unavailable);
+        setStatus(message, "error");
+        detailAnnouncement.textContent = message;
+      } else {
+        const empty = document.createElement("p");
+        empty.className = "detail-muted";
+        empty.textContent = "Selecciona una unidad para consultar su ubicación e historial.";
+        detail.replaceChildren(empty);
+        detailAnnouncement.textContent = "Lista de unidades actualizada.";
       }
     } catch (error: unknown) {
       if (currentRefresh !== refreshRequestNumber) return;
@@ -514,10 +534,19 @@ export function mountUnitsView(): {
       loadFailed = true;
       renderRows();
       detail.replaceChildren();
-      setStatus(messageFor(error), "error");
-      detailAnnouncement.textContent = "No se pudo cargar la lista de unidades.";
+      const message = messageFor(error);
+      const failure = document.createElement("p");
+      failure.className = "detail-warning";
+      failure.textContent = `No se pudo actualizar el detalle: ${message}`;
+      detail.append(failure);
+      setStatus(message, "error");
+      detailAnnouncement.textContent = `No se pudo cargar la lista de unidades: ${message}`;
     } finally {
-      if (currentRefresh === refreshRequestNumber) refreshButton.disabled = false;
+      if (currentRefresh === refreshRequestNumber) {
+        refreshButton.disabled = false;
+        refreshButton.removeAttribute("aria-busy");
+        detail.removeAttribute("aria-busy");
+      }
     }
   }
 
