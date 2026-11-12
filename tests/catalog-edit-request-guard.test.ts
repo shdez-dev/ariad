@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { inventoryIpc } from "../src/lib/ipc.ts";
+import { AriadnaIpcError, inventoryIpc } from "../src/lib/ipc.ts";
 import { mountLocationsView } from "../src/views/locations-view.ts";
 import { mountProductsView } from "../src/views/products-view.ts";
 
@@ -167,6 +167,7 @@ for (const kind of ["products", "locations"] as const) {
   const formSubmitSelector = isProducts ? "#product-form-submit" : "#location-form-submit";
   const formMessageSelector = isProducts ? "#product-form-message" : "#location-form-message";
   const rowsSelector = isProducts ? "#products-table-body" : "#locations-table-body";
+  const filterSelector = isProducts ? "#products-filter" : "#locations-filter";
   const newButtonSelector = isProducts ? "#product-new" : "#location-new";
   const cancelButtonSelector = isProducts ? "#product-cancel" : "#location-cancel";
   const statusSelector = isProducts ? "#products-status" : "#locations-status";
@@ -409,6 +410,106 @@ for (const kind of ["products", "locations"] as const) {
     });
   });
 
+  test(kind + ": comunica una carga pendiente y reactiva la actualización al terminar", async () => {
+    const pendingList = deferred<(typeof records)[number][]>();
+    await withMountedView(kind, {
+      [listMethod]: () => pendingList.promise,
+    }, async (elements, view) => {
+      const request = view.refresh();
+      assert.equal(elements.get(refreshButtonSelector)!.disabled, true);
+      assert.equal(elements.get(statusSelector)!.textContent, isProducts
+        ? "Consultando catálogo…"
+        : "Consultando ubicaciones…");
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "neutral");
+
+      pendingList.resolve(records);
+      await request;
+      assert.equal(elements.get(refreshButtonSelector)!.disabled, false);
+      assert.equal(elements.get(rowsSelector)!.children.length, records.length);
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "neutral");
+    });
+  });
+
+  test(kind + ": diferencia un filtro sin coincidencias de una lista vacía", async () => {
+    await withMountedView(kind, {
+      [listMethod]: async () => records,
+    }, async (elements, view) => {
+      await view.refresh();
+      const filter = elements.get(filterSelector)!;
+      filter.value = "sin-coincidencias";
+      filter.dispatch("input");
+      assert.equal(elements.get(rowsSelector)!.children.length, 1);
+      assert.equal(elements.get(rowsSelector)!.children[0].children[0].textContent, isProducts
+        ? "No hay productos que coincidan con el filtro."
+        : "No hay ubicaciones que coincidan con el filtro.");
+      assert.equal(elements.get(statusSelector)!.textContent, isProducts
+        ? "2 productos cargados."
+        : "2 ubicaciones cargadas.");
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "neutral");
+
+      filter.value = "";
+      filter.dispatch("input");
+      assert.equal(elements.get(rowsSelector)!.children.length, records.length);
+    });
+  });
+
+  test(kind + ": muestra el error estructurado de una referencia sin anunciar éxito", async () => {
+    const operationId = isProducts ? "op-product-reference-17" : "op-location-reference-17";
+    const message = "No se encontró el registro relacionado; no se guardaron cambios.";
+    await withMountedView(kind, {
+      [listMethod]: async () => records,
+      [getMethod]: async () => {
+        throw new AriadnaIpcError({ code: "not_found", message, operationId });
+      },
+    }, async (elements, view) => {
+      await view.refresh();
+      renderedEditButtons(elements)[0].dispatch("click");
+      await flushPromises();
+
+      assert.equal(elements.get(formSelector)!.hidden, true);
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "error");
+      assert.match(elements.get(statusSelector)!.textContent, /no se guardaron cambios/);
+      assert.match(elements.get(statusSelector)!.textContent, new RegExp(operationId));
+      assert.doesNotMatch(elements.get(statusSelector)!.textContent, /se guardó|actualizado/);
+    });
+  });
+
+  test(kind + ": conserva el éxito de escritura cuando falla la recarga posterior", async () => {
+    const operationId = isProducts ? "op-product-refresh-23" : "op-location-refresh-23";
+    let listCalls = 0;
+    await withMountedView(kind, {
+      [listMethod]: () => {
+        listCalls += 1;
+        return listCalls === 1
+          ? Promise.resolve(records)
+          : Promise.reject(new AriadnaIpcError({
+              code: "storage",
+              message: "La base local no está disponible.",
+              operationId,
+            }));
+      },
+      [isProducts ? "createProduct" : "createLocation"]: async () => records[0],
+    }, async (elements, view) => {
+      await view.refresh();
+      elements.get(newButtonSelector)!.dispatch("click");
+      elements.get(formSelector)!.dispatch("submit");
+      await flushPromises();
+      await flushPromises();
+
+      const status = elements.get(statusSelector)!;
+      assert.equal(listCalls, 2);
+      assert.equal(elements.get(formSelector)!.hidden, true);
+      assert.equal(status.dataset.kind, "error");
+      assert.match(status.textContent, /guardad[oa], pero no se pudo actualizar la lista/);
+      assert.match(status.textContent, /La base local no está disponible/);
+      assert.match(status.textContent, new RegExp(operationId));
+      assert.doesNotMatch(status.textContent, /no se pudo guardar/i);
+      assert.equal(elements.get(rowsSelector)!.children[0].children[0].textContent, isProducts
+        ? "No se pudo cargar el catálogo de productos."
+        : "No se pudo cargar la lista de ubicaciones.");
+    });
+  });
+
   test(kind + ": presenta los estados vacío y error de la lista", async () => {
     const emptyMessage = isProducts
       ? "Aún no hay productos. Crea un producto para empezar el catálogo."
@@ -438,10 +539,18 @@ for (const kind of ["products", "locations"] as const) {
   });
 
   test(kind + ": el error IPC de guardado aparece en el formulario y el estado", async () => {
-    const saveError = isProducts ? "El SKU ya existe." : "La jerarquía de la ubicación no es válida.";
+    const operationId = isProducts ? "op-product-conflict-11" : "op-location-hierarchy-11";
+    const message = isProducts
+      ? "El SKU ya existe; no se guardaron cambios."
+      : "El nivel y la ubicación padre no forman una jerarquía válida; no se guardaron cambios.";
+    const saveError = new AriadnaIpcError({
+      code: isProducts ? "conflict" : "invalid_location_hierarchy",
+      message,
+      operationId,
+    });
     await withMountedView(kind, {
       [listMethod]: async () => records,
-      [isProducts ? "createProduct" : "createLocation"]: async () => { throw new Error(saveError); },
+      [isProducts ? "createProduct" : "createLocation"]: async () => { throw saveError; },
     }, async (elements, view) => {
       await view.refresh();
       elements.get(newButtonSelector)!.dispatch("click");
@@ -449,11 +558,13 @@ for (const kind of ["products", "locations"] as const) {
       await flushPromises();
 
       assert.equal(elements.get(formSelector)!.hidden, false);
-      assert.equal(elements.get(formMessageSelector)!.textContent, saveError);
+      assert.equal(elements.get(formMessageSelector)!.textContent, saveError.message);
       assert.equal(elements.get(formMessageSelector)!.dataset.kind, "error");
-      assert.equal(elements.get(statusSelector)!.textContent, saveError);
+      assert.equal(elements.get(statusSelector)!.textContent, saveError.message);
       assert.equal(elements.get(statusSelector)!.dataset.kind, "error");
       assert.equal(elements.get(formSubmitSelector)!.disabled, false);
+      assert.match(elements.get(statusSelector)!.textContent, new RegExp(operationId));
+      assert.doesNotMatch(elements.get(statusSelector)!.textContent, /guardado con éxito|guardada con éxito/i);
     });
   });
 
@@ -478,3 +589,83 @@ for (const kind of ["products", "locations"] as const) {
     });
   });
 }
+
+test("locations: exige padres activos compatibles y permite avanzar por la jerarquía", async () => {
+  const hierarchy = [
+    { id: "zone-a", code: "ZONE-A", name: "Zona A", kind: "zone" as const, parentId: null, active: true },
+    { id: "zone-b", code: "ZONE-B", name: "Zona B", kind: "zone" as const, parentId: null, active: true },
+    { id: "aisle-a", code: "AISLE-A", name: "Pasillo A", kind: "aisle" as const, parentId: "zone-a", active: true },
+    { id: "aisle-inactive", code: "AISLE-X", name: "Pasillo inactivo", kind: "aisle" as const, parentId: "zone-b", active: false },
+    { id: "rack-a", code: "RACK-A", name: "Rack A", kind: "rack" as const, parentId: "aisle-a", active: true },
+    { id: "position-a", code: "POSITION-A", name: "Posición A", kind: "position" as const, parentId: "rack-a", active: true },
+  ];
+  await withMountedView("locations", {
+    listLocations: async () => hierarchy,
+  }, async (elements, view) => {
+    await view.refresh();
+    elements.get("#location-new")!.dispatch("click");
+    const kind = elements.get("#location-kind")!;
+    const parent = elements.get("#location-parent")!;
+    const submit = elements.get("#location-form-submit")!;
+
+    kind.value = "aisle";
+    kind.dispatch("change");
+    assert.deepEqual(parent.children.slice(1).map((option) => option.value), ["zone-a", "zone-b"]);
+    assert.equal(submit.disabled, false);
+
+    kind.value = "rack";
+    kind.dispatch("change");
+    assert.deepEqual(parent.children.slice(1).map((option) => option.value), ["aisle-a"]);
+    assert.equal(submit.disabled, false);
+
+    kind.value = "position";
+    kind.dispatch("change");
+    assert.deepEqual(parent.children.slice(1).map((option) => option.value), ["rack-a"]);
+    assert.equal(submit.disabled, false);
+  });
+
+  await withMountedView("locations", {
+    listLocations: async () => [],
+  }, async (elements, view) => {
+    await view.refresh();
+    elements.get("#location-new")!.dispatch("click");
+    const kind = elements.get("#location-kind")!;
+    kind.value = "aisle";
+    kind.dispatch("change");
+
+    assert.match(elements.get("#location-parent-hint")!.textContent, /Primero crea una ubicación activa del nivel zona/);
+    assert.equal(elements.get("#location-parent-field")!.hidden, false);
+    assert.equal(elements.get("#location-parent")!.required, true);
+    assert.equal(elements.get("#location-form-submit")!.disabled, true);
+  });
+});
+
+test("locations: una ubicación en uso conserva la fila y muestra el error estructurado", async () => {
+  const operationId = "op-location-in-use-29";
+  let listCalls = 0;
+  await withMountedView("locations", {
+    listLocations: async () => {
+      listCalls += 1;
+      return locations;
+    },
+    deactivateLocation: async () => {
+      throw new AriadnaIpcError({
+        code: "in_use",
+        message: "No se desactivó la ubicación porque tiene dependencias activas u ocupación.",
+        operationId,
+      });
+    },
+  }, async (elements, view) => {
+    await view.refresh();
+    renderedDeactivationButtons(elements)[0].dispatch("click");
+    await flushPromises();
+
+    const status = elements.get("#locations-status")!;
+    assert.equal(listCalls, 1);
+    assert.equal(elements.get("#locations-table-body")!.children.length, locations.length);
+    assert.equal(status.dataset.kind, "error");
+    assert.match(status.textContent, /No se desactivó la ubicación/);
+    assert.match(status.textContent, new RegExp(operationId));
+    assert.doesNotMatch(status.textContent, /Ubicación ZONE-A desactivada\./);
+  });
+});

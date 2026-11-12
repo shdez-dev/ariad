@@ -237,10 +237,10 @@ impl ApplicationError {
                 "El SKU solo admite letras, números, guion, guion bajo o punto."
             }
             Self::Domain(DomainError::InvalidLocationHierarchy) => {
-                "El nivel y la ubicación padre no forman una jerarquía válida."
+                "El nivel y la ubicación padre no forman una jerarquía válida; no se guardaron cambios."
             }
             Self::Domain(DomainError::InactiveLocationParent) => {
-                "No se puede crear una ubicación bajo un padre inactivo."
+                "No se puede crear una ubicación bajo un padre inactivo; no se creó la ubicación."
             }
             Self::Domain(DomainError::EmptyField(field)) => match *field {
                 "SKU" => "El SKU es obligatorio.",
@@ -280,13 +280,13 @@ impl ApplicationError {
                 "El movimiento no es válido para el estado actual; no se guardaron cambios."
             }
             Self::Repository(RepositoryError::InvalidLocationHierarchy) => {
-                "El nivel y la ubicación padre no forman una jerarquía válida."
+                "El nivel y la ubicación padre no forman una jerarquía válida; no se guardaron cambios."
             }
             Self::Repository(RepositoryError::LocationHierarchyImmutable) => {
-                "La relación jerárquica se conserva para proteger el historial; actualiza el código o el nombre."
+                "La relación jerárquica se conserva para proteger el historial; no se guardaron cambios. Actualiza el código o el nombre."
             }
             Self::Repository(RepositoryError::InUse) => {
-                "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
+                "No se desactivó la ubicación porque tiene dependencias activas u ocupación."
             }
             Self::Repository(RepositoryError::PositionOccupied) => {
                 "La posición de destino ya está ocupada; no se aplicaron cambios."
@@ -1819,7 +1819,15 @@ mod tests {
         assert!(!error.user_message().contains("sqlite"));
         assert_eq!(
             ApplicationError::Domain(DomainError::InvalidLocationHierarchy).user_message(),
-            "El nivel y la ubicación padre no forman una jerarquía válida."
+            "El nivel y la ubicación padre no forman una jerarquía válida; no se guardaron cambios."
+        );
+        assert_eq!(
+            ApplicationError::Domain(DomainError::InactiveLocationParent).user_message(),
+            "No se puede crear una ubicación bajo un padre inactivo; no se creó la ubicación."
+        );
+        assert_eq!(
+            ApplicationError::Repository(RepositoryError::InvalidLocationHierarchy).user_message(),
+            "El nivel y la ubicación padre no forman una jerarquía válida; no se guardaron cambios."
         );
         assert_eq!(
             ApplicationError::Repository(RepositoryError::Conflict).user_message(),
@@ -1827,7 +1835,12 @@ mod tests {
         );
         assert_eq!(
             ApplicationError::Repository(RepositoryError::InUse).user_message(),
-            "No se puede desactivar la ubicación mientras tenga dependencias activas u ocupación."
+            "No se desactivó la ubicación porque tiene dependencias activas u ocupación."
+        );
+        assert_eq!(
+            ApplicationError::Repository(RepositoryError::LocationHierarchyImmutable)
+                .user_message(),
+            "La relación jerárquica se conserva para proteger el historial; no se guardaron cambios. Actualiza el código o el nombre."
         );
     }
 }
