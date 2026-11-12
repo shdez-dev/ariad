@@ -1,5 +1,6 @@
 import { inventoryIpc, type HandlingUnitDto, type LocationDto } from "../lib/ipc";
 import { locationKindLabels } from "../lib/catalog-model";
+import { createWarehouseMapRefreshGuard } from "../lib/warehouse-map-refresh-guard";
 import {
   buildWarehouseMap,
   getPositionState,
@@ -26,8 +27,7 @@ const selectionAnnouncement = requiredElement<HTMLElement>("#selection-announcem
 
 let mapModel: WarehouseMapModel | null = null;
 let selectedPositionId: string | null = null;
-let detailRequestNumber = 0;
-let refreshRequestNumber = 0;
+const refreshGuard = createWarehouseMapRefreshGuard();
 let mapHasRendered = false;
 let pendingMapFocusId: string | null = null;
 const expandedLocationIds = new Set<string>();
@@ -336,6 +336,7 @@ function renderPositionDetails(
 }
 
 function renderNoSelection(): void {
+  detailsElement.removeAttribute("aria-busy");
   detailsElement.replaceChildren();
   const empty = createElement("div", "selection-empty");
   empty.append(
@@ -351,6 +352,18 @@ function renderNoSelection(): void {
   detailsElement.append(empty);
 }
 
+function renderMapUpdatingDetails(): void {
+  detailsElement.replaceChildren();
+  const empty = createElement("div", "selection-empty");
+  empty.append(
+    createElement("span", "selection-mark", "⌖"),
+    createElement("p", "detail-kicker", "DETALLE DE UBICACIÓN"),
+    createElement("h2", "detail-title", "Actualizando posición"),
+    createElement("p", "detail-muted", "Consultando la ubicación y el pallet guardados."),
+  );
+  detailsElement.append(empty);
+}
+
 async function selectPosition(locationId: string): Promise<void> {
   if (!mapModel) return;
   const node = mapModel.locationsById.get(locationId);
@@ -359,7 +372,9 @@ async function selectPosition(locationId: string): Promise<void> {
   selectedPositionId = locationId;
   syncSelectedPosition();
   const units = mapModel.unitsByLocation.get(locationId) ?? [];
-  const requestNumber = ++detailRequestNumber;
+  const requestNumber = refreshGuard.beginDetailRequest();
+  if (units.length === 1) detailsElement.setAttribute("aria-busy", "true");
+  else detailsElement.removeAttribute("aria-busy");
   renderPositionDetails(node.location, units, units.length === 1);
   const state = stateLabels[stateFor(node.location).state].toLowerCase();
   if (units.length === 1) {
@@ -374,22 +389,30 @@ async function selectPosition(locationId: string): Promise<void> {
 
   try {
     const detailedUnit = await inventoryIpc.getHandlingUnit(units[0].id);
-    if (requestNumber !== detailRequestNumber || selectedPositionId !== locationId) return;
+    if (!refreshGuard.isCurrentDetailRequest(requestNumber) || selectedPositionId !== locationId) return;
     renderPositionDetails(node.location, detailedUnit ? [detailedUnit] : [], false);
     selectionAnnouncement.textContent = detailedUnit
       ? `Detalle del pallet ${detailedUnit.label} cargado para la posición ${node.location.code}.`
       : `No se encontró el pallet asociado a la posición ${node.location.code}. Actualiza el mapa.`;
   } catch (error: unknown) {
-    if (requestNumber !== detailRequestNumber || selectedPositionId !== locationId) return;
+    if (!refreshGuard.isCurrentDetailRequest(requestNumber) || selectedPositionId !== locationId) return;
     const message = error instanceof Error ? error.message : "No se pudo consultar el pallet asociado.";
     renderPositionDetails(node.location, units, false, message);
     selectionAnnouncement.textContent = `No se pudo consultar el pallet de la posición ${node.location.code}.`;
+  } finally {
+    if (refreshGuard.isCurrentDetailRequest(requestNumber)) detailsElement.removeAttribute("aria-busy");
   }
 }
 
 async function refreshWarehouseMap(): Promise<void> {
-  const requestNumber = ++refreshRequestNumber;
+  const requestNumber = refreshGuard.beginRefresh();
   rememberMapFocus();
+  if (selectedPositionId) {
+    detailsElement.setAttribute("aria-busy", "true");
+    renderMapUpdatingDetails();
+  } else {
+    detailsElement.removeAttribute("aria-busy");
+  }
   refreshButton.disabled = true;
   refreshButton.setAttribute("aria-busy", "true");
   mapPanel.setAttribute("aria-busy", "true");
@@ -402,7 +425,7 @@ async function refreshWarehouseMap(): Promise<void> {
       inventoryIpc.listLocations(true),
       inventoryIpc.listHandlingUnits(false),
     ]);
-    if (requestNumber !== refreshRequestNumber) return;
+    if (!refreshGuard.isLatestRefresh(requestNumber)) return;
     mapModel = buildWarehouseMap(locations, units);
     renderSummary(mapModel);
     renderMap(mapModel);
@@ -416,7 +439,7 @@ async function refreshWarehouseMap(): Promise<void> {
       renderNoSelection();
     }
   } catch (error: unknown) {
-    if (requestNumber !== refreshRequestNumber) return;
+    if (!refreshGuard.isLatestRefresh(requestNumber)) return;
     mapModel = null;
     selectedPositionId = null;
     summaryElement.replaceChildren();
@@ -437,7 +460,7 @@ async function refreshWarehouseMap(): Promise<void> {
       mapStatus.focus({ preventScroll: true });
     }
   } finally {
-    if (requestNumber === refreshRequestNumber) {
+    if (refreshGuard.isLatestRefresh(requestNumber)) {
       refreshButton.disabled = false;
       refreshButton.removeAttribute("aria-busy");
       mapPanel.removeAttribute("aria-busy");
