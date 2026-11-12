@@ -57,6 +57,9 @@ jobs:
       - name: Test catalog model
         run: npm run test:catalog
 
+      - name: Test catalog edit request concurrency
+        run: npm run test:catalog-views
+
       - name: Test simulator model
         run: npm run test:simulator
 

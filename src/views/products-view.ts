@@ -1,5 +1,6 @@
-import { AriadnaIpcError, inventoryIpc, type ProductDto } from "../lib/ipc";
-import { filterProducts } from "../lib/catalog-model";
+import { AriadnaIpcError, inventoryIpc, type ProductDto } from "../lib/ipc.ts";
+import { filterProducts } from "../lib/catalog-model.ts";
+import { createCatalogEditRequestGuard } from "../lib/catalog-edit-request-guard.ts";
 
 type RefreshResult =
   | { kind: "loaded" }
@@ -34,12 +35,22 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
   const newButton = requiredElement<HTMLButtonElement>("#product-new");
   const cancelButton = requiredElement<HTMLButtonElement>("#product-cancel");
   const refreshButton = requiredElement<HTMLButtonElement>("#products-refresh");
+  const editRequestGuard = createCatalogEditRequestGuard();
 
   let products: ProductDto[] = [];
   let formMode: ProductFormMode = "create";
   let editingSku: string | null = null;
   let loadFailed = false;
   let refreshRequestNumber = 0;
+  let userIntentNumber = 0;
+
+  function beginUserIntent(): number {
+    return ++userIntentNumber;
+  }
+
+  function isCurrentUserIntent(intent: number): boolean {
+    return intent === userIntentNumber;
+  }
 
   function setStatus(text: string, kind: "success" | "error" | "neutral" = "neutral"): void {
     status.textContent = text;
@@ -105,59 +116,72 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
   }
 
   function openNewForm(): void {
+    beginUserIntent();
+    editRequestGuard.invalidate();
     formMode = "create";
     editingSku = null;
     form.reset();
     form.hidden = false;
     formTitle.textContent = "Nuevo producto";
     formSubmit.textContent = "Guardar producto";
+    formSubmit.disabled = false;
     skuInput.disabled = false;
     formMessage.textContent = "";
     formMessage.dataset.kind = "neutral";
+    setStatus("Formulario de nuevo producto listo.");
     skuInput.focus();
   }
 
   async function openEditForm(product: ProductDto): Promise<void> {
+    beginUserIntent();
+    form.hidden = true;
+    formSubmit.disabled = true;
     setStatus(`Consultando ${product.sku}…`);
-    let current: ProductDto | null;
-    try {
-      current = await inventoryIpc.getProduct(product.sku);
-    } catch (error: unknown) {
-      setStatus(messageFor(error), "error");
-      return;
-    }
-    if (!current) {
-      setStatus(`No se encontró ${product.sku}. Actualiza el catálogo.`, "error");
-      await refresh();
-      return;
-    }
-    formMode = "edit";
-    editingSku = current.sku;
-    skuInput.value = current.sku;
-    skuInput.disabled = true;
-    descriptionInput.value = current.description;
-    unitInput.value = current.unitOfMeasure;
-    form.hidden = false;
-    formTitle.textContent = `Editar ${current.sku}`;
-    formSubmit.textContent = "Guardar cambios";
-    formMessage.textContent = current.active
-      ? "El SKU identifica el registro y no se puede cambiar."
-      : "Este producto está inactivo; editarlo no lo vuelve a activar.";
-    formMessage.dataset.kind = "neutral";
-    descriptionInput.focus();
+    await editRequestGuard.run(
+      () => inventoryIpc.getProduct(product.sku),
+      (current) => {
+        if (!current) {
+          setStatus(`No se encontró ${product.sku}. Actualiza el catálogo.`, "error");
+          void refresh();
+          return;
+        }
+        formMode = "edit";
+        editingSku = current.sku;
+        skuInput.value = current.sku;
+        skuInput.disabled = true;
+        descriptionInput.value = current.description;
+        unitInput.value = current.unitOfMeasure;
+        form.hidden = false;
+        formTitle.textContent = `Editar ${current.sku}`;
+        formSubmit.textContent = "Guardar cambios";
+        formSubmit.disabled = false;
+        formMessage.textContent = current.active
+          ? "El SKU identifica el registro y no se puede cambiar."
+          : "Este producto está inactivo; editarlo no lo vuelve a activar.";
+        formMessage.dataset.kind = "neutral";
+        descriptionInput.focus();
+      },
+      (error) => setStatus(messageFor(error), "error"),
+    );
   }
 
-  async function refresh(): Promise<RefreshResult> {
+  async function refresh(options: { preserveEditIntent?: boolean } = {}): Promise<RefreshResult> {
+    const editIntent = options.preserveEditIntent
+      ? editRequestGuard.current()
+      : editRequestGuard.invalidate();
     const requestNumber = ++refreshRequestNumber;
     refreshButton.disabled = true;
-    setStatus("Consultando catálogo…");
+    const announceRefresh = !options.preserveEditIntent;
+    if (announceRefresh && editRequestGuard.isCurrent(editIntent)) setStatus("Consultando catálogo…");
     try {
       const nextProducts = await inventoryIpc.listProducts(includeInactive.checked);
       if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
       products = nextProducts;
       loadFailed = false;
       renderProducts();
-      setStatus(`${products.length} ${products.length === 1 ? "producto cargado" : "productos cargados"}.`);
+      if (announceRefresh && editRequestGuard.isCurrent(editIntent)) {
+        setStatus(`${products.length} ${products.length === 1 ? "producto cargado" : "productos cargados"}.`);
+      }
       return { kind: "loaded" };
     } catch (error: unknown) {
       if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
@@ -165,7 +189,7 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
       loadFailed = true;
       renderProducts();
       const message = messageFor(error);
-      setStatus(message, "error");
+      if (announceRefresh && editRequestGuard.isCurrent(editIntent)) setStatus(message, "error");
       return { kind: "failed", message };
     } finally {
       if (requestNumber === refreshRequestNumber) refreshButton.disabled = false;
@@ -175,23 +199,29 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
   async function deactivateProduct(product: ProductDto): Promise<void> {
     const confirmed = window.confirm(`¿Desactivar el producto ${product.sku}? Se conservarán sus referencias e historial.`);
     if (!confirmed) return;
+    editRequestGuard.invalidate();
+    const actionIntent = beginUserIntent();
+    setStatus(`Desactivando ${product.sku}…`);
     try {
       await inventoryIpc.deactivateProduct(product.sku);
-      const result = await refresh();
-      if (result.kind === "loaded") {
+      const result = await refresh({ preserveEditIntent: true });
+      if (!isCurrentUserIntent(actionIntent)) return;
+      if (result.kind === "loaded" || result.kind === "superseded") {
         setStatus(`Producto ${product.sku} desactivado.`, "success");
       } else if (result.kind === "failed") {
         setStatus(`Producto ${product.sku} desactivado, pero no se pudo actualizar la lista: ${result.message}`, "error");
       }
-      refreshButton.focus();
+      if (result.kind === "loaded") refreshButton.focus();
     } catch (error: unknown) {
-      setStatus(messageFor(error), "error");
+      if (isCurrentUserIntent(actionIntent)) setStatus(messageFor(error), "error");
     }
   }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!form.reportValidity()) return;
+    if (formSubmit.disabled || !form.reportValidity()) return;
+    editRequestGuard.invalidate();
+    const formIntent = beginUserIntent();
 
     const sku = skuInput.value.trim();
     const description = descriptionInput.value.trim();
@@ -199,32 +229,39 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
     formSubmit.disabled = true;
     formMessage.textContent = "Guardando…";
     formMessage.dataset.kind = "neutral";
+    setStatus("Guardando producto…");
 
     const request = formMode === "create"
       ? inventoryIpc.createProduct({ sku, description, unitOfMeasure })
       : inventoryIpc.updateProduct({ sku: editingSku ?? sku, description, unitOfMeasure });
 
     void request.then(async (product) => {
-      form.hidden = true;
-      const result = await refresh();
-      if (result.kind === "loaded") {
+      if (isCurrentUserIntent(formIntent)) form.hidden = true;
+      const result = await refresh({ preserveEditIntent: true });
+      if (!isCurrentUserIntent(formIntent)) return;
+      if (result.kind === "loaded" || result.kind === "superseded") {
         setStatus(`Producto ${product.sku} guardado.`, "success");
       } else if (result.kind === "failed") {
         setStatus(`Producto ${product.sku} guardado, pero no se pudo actualizar la lista: ${result.message}`, "error");
       }
       newButton.focus();
     }).catch((error: unknown) => {
+      if (!isCurrentUserIntent(formIntent)) return;
       formMessage.textContent = messageFor(error);
       formMessage.dataset.kind = "error";
+      setStatus(messageFor(error), "error");
     }).finally(() => {
-      formSubmit.disabled = false;
+      if (isCurrentUserIntent(formIntent)) formSubmit.disabled = false;
     });
   });
 
   newButton.addEventListener("click", openNewForm);
   cancelButton.addEventListener("click", () => {
+    beginUserIntent();
+    editRequestGuard.invalidate();
     form.hidden = true;
     formMessage.textContent = "";
+    setStatus("Formulario de producto cerrado.");
     newButton.focus();
   });
   refreshButton.addEventListener("click", () => void refresh());

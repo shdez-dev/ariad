@@ -1,11 +1,12 @@
-import { AriadnaIpcError, inventoryIpc, type LocationDto, type LocationKind } from "../lib/ipc";
+import { AriadnaIpcError, inventoryIpc, type LocationDto, type LocationKind } from "../lib/ipc.ts";
 import {
   availableLocationParents,
   filterLocations,
   getLocationPath,
   locationKindLabels,
   requiredLocationParentKind,
-} from "../lib/catalog-model";
+} from "../lib/catalog-model.ts";
+import { createCatalogEditRequestGuard } from "../lib/catalog-edit-request-guard.ts";
 
 type RefreshResult =
   | { kind: "loaded" }
@@ -41,11 +42,21 @@ export function mountLocationsView(): { refresh: () => Promise<RefreshResult> } 
   const newButton = requiredElement<HTMLButtonElement>("#location-new");
   const cancelButton = requiredElement<HTMLButtonElement>("#location-cancel");
   const refreshButton = requiredElement<HTMLButtonElement>("#locations-refresh");
+  const editRequestGuard = createCatalogEditRequestGuard();
 
   let locations: LocationDto[] = [];
   let editingLocation: LocationDto | null = null;
   let loadingFailed = false;
   let refreshRequestNumber = 0;
+  let userIntentNumber = 0;
+
+  function beginUserIntent(): number {
+    return ++userIntentNumber;
+  }
+
+  function isCurrentUserIntent(intent: number): boolean {
+    return intent === userIntentNumber;
+  }
 
   function setStatus(text: string, kind: "success" | "error" | "neutral" = "neutral"): void {
     status.textContent = text;
@@ -145,63 +156,75 @@ export function mountLocationsView(): { refresh: () => Promise<RefreshResult> } 
   }
 
   function openNewForm(): void {
+    beginUserIntent();
+    editRequestGuard.invalidate();
     editingLocation = null;
     form.reset();
     form.hidden = false;
     formTitle.textContent = "Nueva ubicación";
     formSubmit.textContent = "Guardar ubicación";
+    formSubmit.disabled = false;
     kindInput.disabled = false;
     formMessage.textContent = "El identificador interno se generará automáticamente.";
     formMessage.dataset.kind = "neutral";
+    setStatus("Formulario de nueva ubicación listo.");
     refreshParents("zone");
     codeInput.focus();
   }
 
   async function openEditForm(location: LocationDto): Promise<void> {
+    beginUserIntent();
+    form.hidden = true;
+    formSubmit.disabled = true;
     setStatus(`Consultando ${location.code}…`);
-    let current: LocationDto | null;
-    try {
-      current = await inventoryIpc.getLocation(location.id);
-    } catch (error: unknown) {
-      setStatus(messageFor(error), "error");
-      return;
-    }
-    if (!current) {
-      setStatus(`No se encontró ${location.code}. Actualiza las ubicaciones.`, "error");
-      await refresh();
-      return;
-    }
-    editingLocation = current;
-    form.hidden = false;
-    formTitle.textContent = `Editar ${current.code}`;
-    formSubmit.textContent = "Guardar cambios";
-    kindInput.value = current.kind;
-    kindInput.disabled = true;
-    codeInput.value = current.code;
-    nameInput.value = current.name;
-    refreshParents(current.kind, current.parentId);
-    parentField.hidden = true;
-    parentInput.required = false;
-    formSubmit.disabled = false;
-    const parentPath = current.parentId
-      ? getLocationPath(locations.find((item) => item.id === current.parentId), locations)
-      : "Nivel superior";
-    formMessage.textContent = `${locationKindLabels[current.kind]} · ${parentPath}. El nivel y su ubicación superior quedan fijos para conservar la jerarquía histórica.`;
-    formMessage.dataset.kind = "neutral";
-    codeInput.focus();
+    await editRequestGuard.run(
+      () => inventoryIpc.getLocation(location.id),
+      (current) => {
+        if (!current) {
+          setStatus(`No se encontró ${location.code}. Actualiza las ubicaciones.`, "error");
+          void refresh();
+          return;
+        }
+        editingLocation = current;
+        form.hidden = false;
+        formTitle.textContent = `Editar ${current.code}`;
+        formSubmit.textContent = "Guardar cambios";
+        kindInput.value = current.kind;
+        kindInput.disabled = true;
+        codeInput.value = current.code;
+        nameInput.value = current.name;
+        refreshParents(current.kind, current.parentId);
+        parentField.hidden = true;
+        parentInput.required = false;
+        formSubmit.disabled = false;
+        const parentPath = current.parentId
+          ? getLocationPath(locations.find((item) => item.id === current.parentId), locations)
+          : "Nivel superior";
+        formMessage.textContent = `${locationKindLabels[current.kind]} · ${parentPath}. El nivel y su ubicación superior quedan fijos para conservar la jerarquía histórica.`;
+        formMessage.dataset.kind = "neutral";
+        codeInput.focus();
+      },
+      (error) => setStatus(messageFor(error), "error"),
+    );
   }
 
-  async function refresh(): Promise<RefreshResult> {
+  async function refresh(options: { preserveEditIntent?: boolean } = {}): Promise<RefreshResult> {
+    const editIntent = options.preserveEditIntent
+      ? editRequestGuard.current()
+      : editRequestGuard.invalidate();
     const requestNumber = ++refreshRequestNumber;
     refreshButton.disabled = true;
-    setStatus("Consultando ubicaciones…");
+    const announceRefresh = !options.preserveEditIntent;
+    if (announceRefresh && editRequestGuard.isCurrent(editIntent)) setStatus("Consultando ubicaciones…");
     try {
       const nextLocations = await inventoryIpc.listLocations(includeInactive.checked);
       if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
       locations = nextLocations;
       loadingFailed = false;
       renderLocations();
-      setStatus(`${locations.length} ${locations.length === 1 ? "ubicación cargada" : "ubicaciones cargadas"}.`);
+      if (announceRefresh && editRequestGuard.isCurrent(editIntent)) {
+        setStatus(`${locations.length} ${locations.length === 1 ? "ubicación cargada" : "ubicaciones cargadas"}.`);
+      }
       return { kind: "loaded" };
     } catch (error: unknown) {
       if (requestNumber !== refreshRequestNumber) return { kind: "superseded" };
@@ -209,7 +232,7 @@ export function mountLocationsView(): { refresh: () => Promise<RefreshResult> } 
       loadingFailed = true;
       renderLocations();
       const message = messageFor(error);
-      setStatus(message, "error");
+      if (announceRefresh && editRequestGuard.isCurrent(editIntent)) setStatus(message, "error");
       return { kind: "failed", message };
     } finally {
       if (requestNumber === refreshRequestNumber) refreshButton.disabled = false;
@@ -219,29 +242,36 @@ export function mountLocationsView(): { refresh: () => Promise<RefreshResult> } 
   async function deactivateLocation(location: LocationDto): Promise<void> {
     const confirmed = window.confirm(`¿Desactivar ${location.code}? Sus referencias históricas se conservarán.`);
     if (!confirmed) return;
+    editRequestGuard.invalidate();
+    const actionIntent = beginUserIntent();
+    setStatus(`Desactivando ${location.code}…`);
     try {
       await inventoryIpc.deactivateLocation(location.id);
-      const result = await refresh();
-      if (result.kind === "loaded") {
+      const result = await refresh({ preserveEditIntent: true });
+      if (!isCurrentUserIntent(actionIntent)) return;
+      if (result.kind === "loaded" || result.kind === "superseded") {
         setStatus(`Ubicación ${location.code} desactivada.`, "success");
       } else if (result.kind === "failed") {
         setStatus(`Ubicación ${location.code} desactivada, pero no se pudo actualizar la lista: ${result.message}`, "error");
       }
-      refreshButton.focus();
+      if (result.kind === "loaded") refreshButton.focus();
     } catch (error: unknown) {
-      setStatus(messageFor(error), "error");
+      if (isCurrentUserIntent(actionIntent)) setStatus(messageFor(error), "error");
     }
   }
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!form.reportValidity()) return;
+    if (formSubmit.disabled || !form.reportValidity()) return;
+    editRequestGuard.invalidate();
+    const formIntent = beginUserIntent();
 
     const code = codeInput.value.trim();
     const name = nameInput.value.trim();
     formSubmit.disabled = true;
     formMessage.textContent = "Guardando…";
     formMessage.dataset.kind = "neutral";
+    setStatus("Guardando ubicación…");
 
     const request = editingLocation
       ? inventoryIpc.updateLocation({ id: editingLocation.id, code, name })
@@ -254,26 +284,32 @@ export function mountLocationsView(): { refresh: () => Promise<RefreshResult> } 
         });
 
     void request.then(async (location) => {
-      form.hidden = true;
-      const result = await refresh();
-      if (result.kind === "loaded") {
+      if (isCurrentUserIntent(formIntent)) form.hidden = true;
+      const result = await refresh({ preserveEditIntent: true });
+      if (!isCurrentUserIntent(formIntent)) return;
+      if (result.kind === "loaded" || result.kind === "superseded") {
         setStatus(`Ubicación ${location.code} guardada.`, "success");
       } else if (result.kind === "failed") {
         setStatus(`Ubicación ${location.code} guardada, pero no se pudo actualizar la lista: ${result.message}`, "error");
       }
       newButton.focus();
     }).catch((error: unknown) => {
+      if (!isCurrentUserIntent(formIntent)) return;
       formMessage.textContent = messageFor(error);
       formMessage.dataset.kind = "error";
+      setStatus(messageFor(error), "error");
     }).finally(() => {
-      formSubmit.disabled = false;
+      if (isCurrentUserIntent(formIntent)) formSubmit.disabled = false;
     });
   });
 
   newButton.addEventListener("click", openNewForm);
   cancelButton.addEventListener("click", () => {
+    beginUserIntent();
+    editRequestGuard.invalidate();
     form.hidden = true;
     formMessage.textContent = "";
+    setStatus("Formulario de ubicación cerrado.");
     newButton.focus();
   });
   refreshButton.addEventListener("click", () => void refresh());
