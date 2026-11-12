@@ -49,7 +49,7 @@ Si aparece `An Application Control policy has blocked this file (os error 4551)`
 - En Windows, los registros JSON Lines se guardan bajo `%APPDATA%\\com.ariadna.inventory\\logs\\ariadna.log`. Cada archivo tiene un límite de 5 MiB y conserva hasta tres copias rotativas (`ariadna.log.1` a `.3`). No se envían registros a servicios externos.
 - `src/lib/ipc.ts` contiene las funciones tipadas `invoke` para el frontend. La fuente del evento la fija Rust; el frontend conserva el ID y la fecha UTC al reintentar la misma intención para respetar la idempotencia.
 - No hay API HTTP de negocio ni permisos generales de shell, filesystem o red habilitados.
-- El simulador invoca los casos de uso de recepción, asignación, traslado y despacho; no tiene persistencia paralela y no habla por HTTP ni MQTT. Una misma semilla genera los mismos IDs de evento y tiempos. Las filas de intentos son append-only y cada ejecución de una anomalía puede añadir un intento y alerta nuevos.
+- El simulador invoca los casos de uso de recepción, asignación, traslado y despacho; no tiene persistencia paralela y no habla por HTTP ni MQTT. La misma pareja de semilla y escenario genera los mismos IDs y tiempos; escenarios distintos quedan aislados aunque compartan semilla. Las filas de intentos son append-only y cada ejecución de una anomalía puede añadir un intento y alerta nuevos.
 
 Consulta el [contrato IPC](docs/ipc-contract.md), la [línea base de arquitectura](docs/arquitectura-base.md), la [matriz de trazabilidad](docs/trazabilidad.md) y la [guía de operación, copias y restauración](docs/operacion/copias-y-restauracion.md).
 
@@ -59,7 +59,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 ## Trabajo siguiente
 
-1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos teclado, CRUD, errores, estados vacíos y escenarios del simulador. La [matriz de trazabilidad](docs/trazabilidad.md) detalla los puntos abiertos.
+1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos navegación por teclado y lector de pantalla, CRUD, errores y estados vacíos. La revisión aislada ya confirmó que escenarios distintos no comparten posiciones al reutilizar una semilla; falta la CI Windows de esta corrección. La [matriz de trazabilidad](docs/trazabilidad.md) detalla los puntos abiertos.
 2. Sincronizar ARD-23 con el documento **Guía de operación** de AETHER. Su editor MCP aún rechaza el cambio por bloques; la guía versionada en el repositorio y la matriz de trazabilidad están actualizadas.
 3. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
 4. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.

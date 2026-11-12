@@ -68,7 +68,7 @@ Usa nombres, códigos, SKU y cantidades inventados. El flujo representa una oper
 7. En **Movimientos**, abre **Despachar** y confirma la salida. Comprueba que la posición queda libre y que el pallet conserva sus líneas e historial.
 8. En **Simulador**, conserva una semilla, elige **Recorrido normal** y pulsa **Ejecutar simulación**. Luego prueba **Destino ocupado** o **Etiqueta desconocida** y abre la alerta relacionada desde **Alertas**.
 
-El simulador usa identificadores y marcas de tiempo deterministas según la semilla seleccionada. Al volver a ejecutar escenarios de anomalía puede añadir nuevos intentos y alertas al historial local. Para una demostración repetible, inicia con un perfil de datos limpio o conserva la semilla y el estado de la base que documentes.
+El simulador usa identificadores y marcas de tiempo deterministas según la pareja de semilla y escenario seleccionada. Escenarios distintos mantienen catálogos sintéticos independientes aunque compartan una semilla. Al volver a ejecutar escenarios de anomalía puede añadir nuevos intentos y alertas al historial local. Para una demostración repetible, inicia con un perfil de datos limpio o conserva la semilla y el estado de la base que documentes.
 
 ## Capturas con datos sintéticos
 

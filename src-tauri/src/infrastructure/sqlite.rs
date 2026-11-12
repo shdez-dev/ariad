@@ -4385,6 +4385,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn simulator_scenarios_with_same_seed_use_isolated_synthetic_catalogs() {
+        let database = SqliteDatabase::in_memory().await.unwrap();
+        let repository = Arc::new(SqliteInventoryRepository::new(&database));
+        let simulator = RunSimulation::new(repository);
+        let seed = "shared-seed-across-scenarios";
+
+        let normal = simulator
+            .execute(seed, SimulationScenario::Normal)
+            .await
+            .unwrap();
+        let occupied = simulator
+            .execute(seed, SimulationScenario::OccupiedDestination)
+            .await
+            .unwrap();
+        let duplicate = simulator
+            .execute(seed, SimulationScenario::Duplicate)
+            .await
+            .unwrap();
+        let unknown = simulator
+            .execute(seed, SimulationScenario::UnknownLabel)
+            .await
+            .unwrap();
+        let invalid = simulator
+            .execute(seed, SimulationScenario::InvalidLocation)
+            .await
+            .unwrap();
+
+        assert!(normal.steps.iter().all(|step| step.result == "applied"));
+        assert_eq!(
+            occupied
+                .steps
+                .iter()
+                .map(|step| step.result.as_str())
+                .collect::<Vec<_>>(),
+            ["applied", "applied", "applied", "rejected"]
+        );
+        assert_eq!(
+            duplicate
+                .steps
+                .iter()
+                .map(|step| step.result.as_str())
+                .collect::<Vec<_>>(),
+            ["applied", "applied", "applied", "duplicate"]
+        );
+        assert_eq!(unknown.steps[0].result, "rejected");
+        assert_eq!(
+            invalid
+                .steps
+                .iter()
+                .map(|step| step.result.as_str())
+                .collect::<Vec<_>>(),
+            ["applied", "rejected"]
+        );
+        let product_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE sku LIKE 'SIM.%'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        let location_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM locations")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(product_count, 5);
+        assert_eq!(location_count, 25);
+
+        let duplicate_rerun = simulator
+            .execute(seed, SimulationScenario::Duplicate)
+            .await
+            .unwrap();
+        assert_eq!(
+            duplicate.steps[2].event_id,
+            duplicate_rerun.steps[2].event_id
+        );
+        assert_eq!(duplicate_rerun.steps[3].result, "duplicate");
+        database.close().await;
+    }
+
+    #[tokio::test]
     async fn simulator_anomaly_reruns_create_distinct_exact_attempt_alerts_without_moving_units() {
         type EventSnapshotRow = (String, String, String, Option<String>, Option<String>, i64);
 
@@ -4485,7 +4563,7 @@ mod tests {
         ] {
             let database = SqliteDatabase::in_memory().await.unwrap();
             let repository = Arc::new(SqliteInventoryRepository::new(&database));
-            let hash = test_seed_hash(seed);
+            let hash = test_run_hash(seed, SimulationScenario::Normal);
             let sku = format!("SIM.{hash:016X}");
             repository
                 .insert_product(&Product::new(&sku, description, unit_of_measure).unwrap())
@@ -4522,7 +4600,7 @@ mod tests {
         ] {
             let database = SqliteDatabase::in_memory().await.unwrap();
             let repository = Arc::new(SqliteInventoryRepository::new(&database));
-            let hash = test_seed_hash(seed);
+            let hash = test_run_hash(seed, SimulationScenario::Normal);
             let prefix = format!("sim-{hash:016x}");
             let expected_code = format!("SZ{hash:016X}");
             let manual_code = if use_expected_code {
@@ -4560,8 +4638,9 @@ mod tests {
         }
     }
 
-    fn test_seed_hash(seed: &str) -> u64 {
-        seed.bytes().fold(0xcbf29ce484222325, |hash, byte| {
+    fn test_run_hash(seed: &str, scenario: SimulationScenario) -> u64 {
+        let run_key = format!("ariadna.simulator.v1\0{seed}\0{}", scenario.as_str());
+        run_key.bytes().fold(0xcbf29ce484222325, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
         })
     }

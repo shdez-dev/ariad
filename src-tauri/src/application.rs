@@ -1009,10 +1009,11 @@ impl RunSimulation {
         }
 
         let seed = seed.to_owned();
-        let seed_hash = stable_seed_hash(&seed);
+        let run_key = format!("ariadna.simulator.v1\0{seed}\0{}", scenario.as_str());
+        let run_hash = stable_seed_hash(&run_key);
         let run = SimulationRunContext {
-            seed_hash,
-            base_time_ms: 1_800_000_000_000 + (seed_hash % 1_000_000) as i64 * 1_000,
+            run_hash,
+            base_time_ms: 1_800_000_000_000 + (run_hash % 1_000_000) as i64 * 1_000,
         };
         let catalog = self.ensure_catalog(&run).await?;
         let steps = match scenario {
@@ -1059,7 +1060,7 @@ impl RunSimulation {
         run: &SimulationRunContext,
     ) -> Result<SimulationCatalog, ApplicationError> {
         let prefix = run.prefix();
-        let sku = format!("SIM.{:016X}", run.seed_hash);
+        let sku = format!("SIM.{:016X}", run.run_hash);
         let product = GetProduct::new(self.repository.clone())
             .execute(&sku)
             .await?;
@@ -1086,7 +1087,7 @@ impl RunSimulation {
         let second_position_id = format!("{prefix}-position-b");
         self.ensure_location(
             &zone_id,
-            &format!("SZ{:016X}", run.seed_hash),
+            &format!("SZ{:016X}", run.run_hash),
             "Zona sintética",
             LocationKind::Zone,
             None,
@@ -1094,7 +1095,7 @@ impl RunSimulation {
         .await?;
         self.ensure_location(
             &aisle_id,
-            &format!("SA{:016X}", run.seed_hash),
+            &format!("SA{:016X}", run.run_hash),
             "Pasillo sintético",
             LocationKind::Aisle,
             Some(&zone_id),
@@ -1102,7 +1103,7 @@ impl RunSimulation {
         .await?;
         self.ensure_location(
             &rack_id,
-            &format!("SR{:016X}", run.seed_hash),
+            &format!("SR{:016X}", run.run_hash),
             "Rack sintético",
             LocationKind::Rack,
             Some(&aisle_id),
@@ -1110,7 +1111,7 @@ impl RunSimulation {
         .await?;
         self.ensure_location(
             &first_position_id,
-            &format!("SP{:016X}A", run.seed_hash),
+            &format!("SP{:016X}A", run.run_hash),
             "Posición sintética A",
             LocationKind::Position,
             Some(&rack_id),
@@ -1118,7 +1119,7 @@ impl RunSimulation {
         .await?;
         self.ensure_location(
             &second_position_id,
-            &format!("SP{:016X}B", run.seed_hash),
+            &format!("SP{:016X}B", run.run_hash),
             "Posición sintética B",
             LocationKind::Position,
             Some(&rack_id),
@@ -1502,13 +1503,13 @@ impl RunSimulation {
 }
 
 struct SimulationRunContext {
-    seed_hash: u64,
+    run_hash: u64,
     base_time_ms: i64,
 }
 
 impl SimulationRunContext {
     fn prefix(&self) -> String {
-        format!("sim-{:016x}", self.seed_hash)
+        format!("sim-{:016x}", self.run_hash)
     }
 
     fn id(&self, suffix: &str) -> String {
@@ -1516,7 +1517,7 @@ impl SimulationRunContext {
     }
 
     fn label(&self, suffix: &str) -> String {
-        format!("SIM-{:016X}-{suffix}", self.seed_hash)
+        format!("SIM-{:016X}-{suffix}", self.run_hash)
     }
 
     fn time(&self, offset: i64) -> i64 {
