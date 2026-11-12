@@ -165,6 +165,8 @@ for (const kind of ["products", "locations"] as const) {
   const formTitleSelector = isProducts ? "#product-form-title" : "#location-form-title";
   const formSelector = isProducts ? "#product-form" : "#location-form";
   const formSubmitSelector = isProducts ? "#product-form-submit" : "#location-form-submit";
+  const formMessageSelector = isProducts ? "#product-form-message" : "#location-form-message";
+  const rowsSelector = isProducts ? "#products-table-body" : "#locations-table-body";
   const newButtonSelector = isProducts ? "#product-new" : "#location-new";
   const cancelButtonSelector = isProducts ? "#product-cancel" : "#location-cancel";
   const statusSelector = isProducts ? "#products-status" : "#locations-status";
@@ -404,6 +406,75 @@ for (const kind of ["products", "locations"] as const) {
       assert.equal(elements.get(statusSelector)!.textContent, isProducts
         ? "Producto SKU-B desactivado."
         : "Ubicación ZONE-B desactivada.");
+    });
+  });
+
+  test(kind + ": presenta los estados vacío y error de la lista", async () => {
+    const emptyMessage = isProducts
+      ? "Aún no hay productos. Crea un producto para empezar el catálogo."
+      : "Aún no hay ubicaciones. Crea una zona para empezar la jerarquía.";
+    await withMountedView(kind, {
+      [listMethod]: async () => [],
+    }, async (elements, view) => {
+      await view.refresh();
+      const rows = elements.get(rowsSelector)!;
+      assert.equal(rows.children[0].children[0].textContent, emptyMessage);
+      assert.equal(elements.get(statusSelector)!.textContent, isProducts ? "0 productos cargados." : "0 ubicaciones cargadas.");
+    });
+
+    const listError = "El catálogo no está disponible.";
+    await withMountedView(kind, {
+      [listMethod]: async () => { throw new Error(listError); },
+    }, async (elements, view) => {
+      const result = await view.refresh();
+      assert.deepEqual(result, { kind: "failed", message: listError });
+      assert.equal(elements.get(rowsSelector)!.children[0].children[0].textContent, isProducts
+        ? "No se pudo cargar el catálogo de productos."
+        : "No se pudo cargar la lista de ubicaciones.");
+      assert.equal(elements.get(statusSelector)!.textContent, listError);
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "error");
+      assert.equal(elements.get(refreshButtonSelector)!.disabled, false);
+    });
+  });
+
+  test(kind + ": el error IPC de guardado aparece en el formulario y el estado", async () => {
+    const saveError = isProducts ? "El SKU ya existe." : "La jerarquía de la ubicación no es válida.";
+    await withMountedView(kind, {
+      [listMethod]: async () => records,
+      [isProducts ? "createProduct" : "createLocation"]: async () => { throw new Error(saveError); },
+    }, async (elements, view) => {
+      await view.refresh();
+      elements.get(newButtonSelector)!.dispatch("click");
+      elements.get(formSelector)!.dispatch("submit");
+      await flushPromises();
+
+      assert.equal(elements.get(formSelector)!.hidden, false);
+      assert.equal(elements.get(formMessageSelector)!.textContent, saveError);
+      assert.equal(elements.get(formMessageSelector)!.dataset.kind, "error");
+      assert.equal(elements.get(statusSelector)!.textContent, saveError);
+      assert.equal(elements.get(statusSelector)!.dataset.kind, "error");
+      assert.equal(elements.get(formSubmitSelector)!.disabled, false);
+    });
+  });
+
+  test(kind + ": un error de guardado antiguo no reemplaza el formulario Nuevo", async () => {
+    const pendingSave = deferred<(typeof records)[number]>();
+    await withMountedView(kind, {
+      [listMethod]: async () => records,
+      [isProducts ? "createProduct" : "createLocation"]: () => pendingSave.promise,
+    }, async (elements, view) => {
+      await view.refresh();
+      elements.get(newButtonSelector)!.dispatch("click");
+      elements.get(formSelector)!.dispatch("submit");
+      elements.get(newButtonSelector)!.dispatch("click");
+
+      pendingSave.reject(new Error("fallo del guardado anterior"));
+      await flushPromises();
+      assert.equal(elements.get(formSelector)!.hidden, false);
+      assert.equal(elements.get(formTitleSelector)!.textContent, isProducts ? "Nuevo producto" : "Nueva ubicación");
+      assert.doesNotMatch(elements.get(formMessageSelector)!.textContent, /fallo del guardado anterior/);
+      assert.doesNotMatch(elements.get(statusSelector)!.textContent, /fallo del guardado anterior/);
+      assert.equal(elements.get(formSubmitSelector)!.disabled, false);
     });
   });
 }
