@@ -6,7 +6,7 @@ import {
   type MovementHistoryEntryDto,
 } from "../lib/ipc";
 import { getLocationPath } from "../lib/catalog-model";
-import { findHistoryEntry } from "../lib/simulator-model";
+import { findHistoryEntry, movementOccurredLabel } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -273,7 +273,7 @@ export function mountUnitsView(): {
 
         const date = document.createElement("p");
         date.className = "detail-muted";
-        date.textContent = `Ocurrido ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
+        date.textContent = `${movementOccurredLabel(entry.source)} ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
         item.append(header, date);
 
         const movementLocations = document.createElement("p");
@@ -422,7 +422,7 @@ export function mountUnitsView(): {
       heading.append(kind, outcome);
       const date = document.createElement("p");
       date.className = "detail-muted";
-      date.textContent = `Ocurrido ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
+      date.textContent = `${movementOccurredLabel(entry.source)} ${dateLabel(entry.occurredAtMs)} · registrado ${dateLabel(entry.recordedAtMs)}`;
       const reference = document.createElement("p");
       reference.className = "movement-history-source";
       reference.textContent = `Registro ${entry.recordId} · evento ${entry.eventId} · ${entry.source === "simulator" ? "Dato sintético del simulador" : entry.source}`;

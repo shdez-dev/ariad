@@ -1,6 +1,6 @@
 # Ariadna: matriz de trazabilidad
 
-Estado: actualizada el 12 de noviembre de 2026. ARD-10 a ARD-21 tienen incrementos de implementación publicados. ARD-22 y ARD-24 están cerradas tras verificar sus entregables en CI Windows. ARD-11 a ARD-15 cuentan con evidencia de aceptación visual parcial; faltan criterios por conciliar. ARD-12 añade una corrección de presentación durante la recarga de unidades, publicada en `5c866ae2fc2d3f6994f45656a792b11a0481a21b`; la CI Windows `43278754502` está en curso y la inspección visual sigue pendiente. ARD-23 tiene guía, pruebas de recuperación y compatibilidad de migraciones verificadas en CI; está pendiente sincronizar la Guía de operación de AETHER, cuyo editor MCP rechaza cambios por bloques. ARD-25 continúa en progreso hasta completar la aceptación interactiva y revisar una versión candidata. ARD-26 mantiene los indicadores limitados a la evidencia disponible. El commit `4b948e7e8e282e16fde2b834d57457161498c6e2` y el run CI Windows `43277068341` pasaron.
+Estado: actualizada el 12 de noviembre de 2026. ARD-10 a ARD-21 tienen incrementos de implementación publicados. ARD-22 y ARD-24 están cerradas tras verificar sus entregables en CI Windows. ARD-11 a ARD-15 cuentan con evidencia de aceptación visual parcial; faltan criterios por conciliar. ARD-12 añade una corrección de presentación durante la recarga de unidades, publicada en `5c866ae2fc2d3f6994f45656a792b11a0481a21b`; el follow-up documental `7be732edab15183c7953a66d29a48459a013b0ee` pasó la CI Windows `43279363508`. La inspección visual de ARD-12 sigue pendiente. ARD-23 tiene guía, pruebas de recuperación y compatibilidad de migraciones verificadas en CI; está pendiente sincronizar la Guía de operación de AETHER, cuyo editor MCP rechaza cambios por bloques. ARD-25 continúa en progreso hasta completar la aceptación interactiva y revisar una versión candidata. ARD-26 mantiene los indicadores limitados a la evidencia disponible. El commit `4b948e7e8e282e16fde2b834d57457161498c6e2` y el run CI Windows `43277068341` pasaron.
 
 ## Decisiones técnicas que resuelven pendientes
 
@@ -126,7 +126,7 @@ El 12-11-2026 se recompiló `release` con el mismo perfil aislado y se repitió 
 
 La prueba nueva y las 77 pruebas Rust pasan; también pasan build y 16 pruebas frontend, `cargo fmt --check` y Clippy con `-D warnings`. La build `release` y la secuencia visual aislada pasan; la CI remota de este cambio está pendiente.
 
-Observaciones que siguen abiertas: el simulador muestra fechas de ocurrencia deterministas en enero de 2027 y fecha de registro real en noviembre de 2026; la interfaz identifica los datos como sintéticos, pero conviene decidir si la fecha simulada necesita una aclaración visible. Durante una consulta de unidades se observó por un instante el detalle previo hasta que terminó la carga. La revisión no completó el uso exclusivamente con teclado ni un pase con lector de pantalla; tampoco recorrió todos los estados de carga, error y vacío de todas las pantallas. ARD-11 a ARD-15 y la aceptación candidata permanecen parciales.
+Observaciones que siguen abiertas: la interfaz identifica los eventos del simulador con la etiqueta «Fecha simulada», separada de la hora real de registro, para que sus fechas deterministas de enero de 2027 no se confundan con movimientos reales. La revisión no completó el uso exclusivamente con teclado ni un pase con lector de pantalla; tampoco recorrió todos los estados de carga, error y vacío de todas las pantallas. ARD-11 a ARD-15 y la aceptación candidata permanecen parciales.
 
 ## Trabajo en curso de ARD-23
 
@@ -149,6 +149,10 @@ Las capturas corresponden a la revisión `8b99a96c7b945495caba3e292f20291d8171db
 Al actualizar la lista, la vista ahora retira el detalle que podría haber quedado desactualizado y comunica que las unidades se están consultando. El botón de actualización y el panel anuncian su estado ocupado a tecnologías de asistencia. Cuando termina la consulta, la vista vuelve a cargar el detalle de la unidad seleccionada; si no existe selección, presenta la instrucción para elegir una unidad. Si la consulta falla o la unidad ya no está disponible, muestra el motivo en el panel y lo anuncia mediante la región de estado.
 
 La corrección elimina el breve intervalo en que seguía visible un detalle anterior durante la recarga. Verificación local: `npm run build`, 16 pruebas frontend en cinco suites, `cargo test` (77), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` y `git diff --check` pasan. La inspección visual manual de este estado aún está pendiente; ARD-12 y ARD-25 permanecen abiertos hasta completar esa aceptación.
+
+## Clarificación de fechas del simulador, ARD-15
+
+La cronología de unidades y el detalle de alertas muestran «Fecha simulada» para `occurredAtMs` cuando el origen del evento es `simulator`; la hora de `recordedAtMs` se sigue rotulando como «registrado». Los eventos de otras fuentes conservan «Ocurrido». Esto aclara que la fecha determinista pertenece al escenario de demostración y no a la hora real de registro. La prueba del modelo comprueba ambos rótulos y el caso de fuente vacía. `npm run build` y las cinco suites frontend (17 pruebas) pasan. La revisión visual de la etiqueta todavía está pendiente; ARD-15 continúa en progreso.
 
 ## Pendientes de aceptación visual de ARD-11 a ARD-15
 

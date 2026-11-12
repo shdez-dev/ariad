@@ -6,6 +6,7 @@ import {
   findHistoryEntry,
   isSimulatedSource,
   isSimulationScenario,
+  movementOccurredLabel,
   simulationResultLabel,
   simulationResultTone,
   simulationScenarioLabel,
@@ -40,6 +41,12 @@ test("marca como sintética solo la fuente exacta del simulador", () => {
   assert.equal(isSimulatedSource("desktop_ui"), false);
   assert.equal(isSimulatedSource(null), false);
   assert.equal(isSimulatedSource(undefined), false);
+});
+
+test("distingue una fecha de ocurrencia simulada de la fecha de registro", () => {
+  assert.equal(movementOccurredLabel("simulator"), "Fecha simulada");
+  assert.equal(movementOccurredLabel("desktop_ui"), "Ocurrido");
+  assert.equal(movementOccurredLabel(null), "Ocurrido");
 });
 
 test("valida la semilla sin cambiar la cadena que se usará en el recorrido", () => {

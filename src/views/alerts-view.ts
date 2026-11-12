@@ -1,5 +1,5 @@
 import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc";
-import { isSimulatedSource } from "../lib/simulator-model";
+import { isSimulatedSource, movementOccurredLabel } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -101,7 +101,7 @@ export function mountAlertsView(): {
       appendDetailRow(metadata, "Unidad", alert.handlingUnitLabel
         ? `${alert.handlingUnitLabel} · ${alert.handlingUnitId}`
         : `Sin ficha registrada · ${alert.handlingUnitId ?? "sin identificador"}`);
-      appendDetailRow(metadata, "Movimiento", `${eventKindLabel(alert.eventKind)} · ${dateLabel(alert.occurredAtMs)}`);
+      appendDetailRow(metadata, "Movimiento", `${eventKindLabel(alert.eventKind)} · ${movementOccurredLabel(alert.source)} ${dateLabel(alert.occurredAtMs)}`);
       appendDetailRow(metadata, "Registro exacto", alert.recordId);
       appendDetailRow(metadata, "Evento", alert.movementEventId ?? alert.eventId);
       if (alert.movementAttemptId !== undefined && alert.movementAttemptId !== null) {

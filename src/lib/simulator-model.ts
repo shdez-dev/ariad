@@ -28,6 +28,10 @@ export function isSimulatedSource(source: string | null | undefined): boolean {
   return source === "simulator";
 }
 
+export function movementOccurredLabel(source: string | null | undefined): string {
+  return isSimulatedSource(source) ? "Fecha simulada" : "Ocurrido";
+}
+
 export function simulationResultLabel(result: string): string {
   const labels: Record<string, string> = {
     applied: "Aplicado",
