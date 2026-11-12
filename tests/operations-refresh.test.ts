@@ -83,3 +83,24 @@ test("el error y el cierre de una recarga obsoleta no pisan el estado actual", a
   assert.deepEqual(errors, []);
   assert.deepEqual(settled, ["latest"]);
 });
+
+test("un error de la recarga vigente se comunica y finaliza su estado", async () => {
+  const coordinator = createLatestRefreshCoordinator();
+  const current = deferred<string[]>();
+  const applied: string[][] = [];
+  const errors: unknown[] = [];
+  const settled: string[] = [];
+  const failure = new Error("falló la consulta actual");
+
+  const currentRun = coordinator.run(
+    () => current.promise,
+    handlers("current", applied, errors, settled),
+  );
+
+  current.reject(failure);
+  assert.deepEqual(await currentRun, { kind: "failed", message: "current failed" });
+
+  assert.deepEqual(applied, []);
+  assert.deepEqual(errors, [failure]);
+  assert.deepEqual(settled, ["current"]);
+});
