@@ -51,6 +51,9 @@ jobs:
       - name: Test operation refresh concurrency
         run: npm run test:operations
 
+      - name: Test units view request concurrency
+        run: npm run test:units-view
+
       - name: Test catalog model
         run: npm run test:catalog
 

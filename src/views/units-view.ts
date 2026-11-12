@@ -7,6 +7,7 @@ import {
 } from "../lib/ipc";
 import { getLocationPath } from "../lib/catalog-model";
 import { findHistoryEntry, movementOccurredLabel } from "../lib/simulator-model";
+import { createUnitsViewRequestGuard } from "../lib/units-view-request-guard";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -70,8 +71,7 @@ export function mountUnitsView(): {
   let locations: LocationDto[] = [];
   let selectedUnitId: string | null = null;
   let selectedRecordId: string | null = null;
-  let requestNumber = 0;
-  let refreshRequestNumber = 0;
+  const requestGuard = createUnitsViewRequestGuard();
   let loadFailed = false;
 
   function setStatus(text: string, kind: "success" | "error" | "neutral" = "neutral"): void {
@@ -320,50 +320,55 @@ export function mountUnitsView(): {
   ): Promise<void> {
     selectedUnitId = unit.id;
     selectedRecordId = focusRecordId ?? null;
-    const currentRequest = ++requestNumber;
+    const currentRequest = requestGuard.beginDetailRequest();
+    detail.setAttribute("aria-busy", "true");
     renderDetail(unit, null);
     detailAnnouncement.textContent = `Consultando detalle del pallet ${unit.label}.`;
-    const [latestResult, historyResult] = await Promise.allSettled([
-      inventoryIpc.getHandlingUnit(unit.id),
-      inventoryIpc.getMovementHistory(unit.id),
-    ]);
-    if (currentRequest !== requestNumber || selectedUnitId !== unit.id) return;
-    if (latestResult.status === "fulfilled" && !latestResult.value) {
-      detail.replaceChildren();
-      const notFound = document.createElement("p");
-      notFound.className = "detail-warning";
-      notFound.textContent = `No se encontró la unidad ${unit.label}. Actualiza la lista.`;
-      detail.append(notFound);
-      setStatus(`No se encontró la unidad ${unit.label}. Actualiza la lista.`, "error");
-      detailAnnouncement.textContent = `No se encontró el pallet ${unit.label}.`;
-      return;
-    }
-    const latest = latestResult.status === "fulfilled" ? latestResult.value ?? unit : unit;
-    const movementHistory = historyResult.status === "fulfilled" ? historyResult.value : null;
-    const historyError = historyResult.status === "rejected" ? messageFor(historyResult.reason) : undefined;
-    renderDetail(latest, movementHistory, historyError);
-    if (latestResult.status === "rejected") {
-      setStatus(messageFor(latestResult.reason), "error");
-      detailAnnouncement.textContent = `No se pudo actualizar el detalle del pallet ${unit.label}.`;
-    } else if (historyError) {
-      setStatus(`No se pudo cargar la cronología: ${historyError}`, "error");
-      detailAnnouncement.textContent = `Detalle del pallet ${latest.label} cargado, pero falló el historial.`;
-    } else {
-      setStatus(`Detalle y cronología de ${latest.label} cargados.`);
-      detailAnnouncement.textContent = `Detalle e historial del pallet ${latest.label} cargados.`;
-    }
-    if (transferFocus) {
-      const exactEntry = findHistoryEntry(movementHistory ?? [], focusRecordId);
-      const eventTarget = exactEntry
-        ? [...detail.querySelectorAll<HTMLElement>("[data-history-record-id]")]
-          .find((item) => item.dataset.historyRecordId === exactEntry.recordId)
-        : undefined;
-      if (focusRecordId && movementHistory && !eventTarget) {
-        setStatus(`El registro ${focusRecordId} no aparece en la cronología actual.`, "error");
+    try {
+      const [latestResult, historyResult] = await Promise.allSettled([
+        inventoryIpc.getHandlingUnit(unit.id),
+        inventoryIpc.getMovementHistory(unit.id),
+      ]);
+      if (!requestGuard.isCurrentDetailRequest(currentRequest) || selectedUnitId !== unit.id) return;
+      if (latestResult.status === "fulfilled" && !latestResult.value) {
+        detail.replaceChildren();
+        const notFound = document.createElement("p");
+        notFound.className = "detail-warning";
+        notFound.textContent = `No se encontró la unidad ${unit.label}. Actualiza la lista.`;
+        detail.append(notFound);
+        setStatus(`No se encontró la unidad ${unit.label}. Actualiza la lista.`, "error");
+        detailAnnouncement.textContent = `No se encontró el pallet ${unit.label}.`;
+        return;
       }
-      const focusTarget = eventTarget ?? detail.querySelector<HTMLElement>(".detail-title");
-      focusTarget?.focus();
-      eventTarget?.scrollIntoView({ block: "nearest" });
+      const latest = latestResult.status === "fulfilled" ? latestResult.value ?? unit : unit;
+      const movementHistory = historyResult.status === "fulfilled" ? historyResult.value : null;
+      const historyError = historyResult.status === "rejected" ? messageFor(historyResult.reason) : undefined;
+      renderDetail(latest, movementHistory, historyError);
+      if (latestResult.status === "rejected") {
+        setStatus(messageFor(latestResult.reason), "error");
+        detailAnnouncement.textContent = `No se pudo actualizar el detalle del pallet ${unit.label}.`;
+      } else if (historyError) {
+        setStatus(`No se pudo cargar la cronología: ${historyError}`, "error");
+        detailAnnouncement.textContent = `Detalle del pallet ${latest.label} cargado, pero falló el historial.`;
+      } else {
+        setStatus(`Detalle y cronología de ${latest.label} cargados.`);
+        detailAnnouncement.textContent = `Detalle e historial del pallet ${latest.label} cargados.`;
+      }
+      if (transferFocus) {
+        const exactEntry = findHistoryEntry(movementHistory ?? [], focusRecordId);
+        const eventTarget = exactEntry
+          ? [...detail.querySelectorAll<HTMLElement>("[data-history-record-id]")]
+            .find((item) => item.dataset.historyRecordId === exactEntry.recordId)
+          : undefined;
+        if (focusRecordId && movementHistory && !eventTarget) {
+          setStatus(`El registro ${focusRecordId} no aparece en la cronología actual.`, "error");
+        }
+        const focusTarget = eventTarget ?? detail.querySelector<HTMLElement>(".detail-title");
+        focusTarget?.focus();
+        eventTarget?.scrollIntoView({ block: "nearest" });
+      }
+    } finally {
+      if (requestGuard.isCurrentDetailRequest(currentRequest)) detail.removeAttribute("aria-busy");
     }
   }
 
@@ -445,17 +450,18 @@ export function mountUnitsView(): {
   }
 
   async function openByIdentifier(identifier: string, recordId?: string): Promise<void> {
-    const currentRequest = ++requestNumber;
+    const currentRequest = requestGuard.beginDetailRequest();
     selectedUnitId = null;
     selectedRecordId = recordId ?? null;
+    detail.setAttribute("aria-busy", "true");
     detail.replaceChildren();
     detailAnnouncement.textContent = `Buscando la unidad y el registro ${recordId ?? identifier}.`;
     try {
       const unit = await inventoryIpc.getHandlingUnit(identifier);
-      if (currentRequest !== requestNumber) return;
+      if (!requestGuard.isCurrentDetailRequest(currentRequest)) return;
       if (!unit) {
         const history = await inventoryIpc.getMovementHistory(identifier);
-        if (currentRequest !== requestNumber) return;
+        if (!requestGuard.isCurrentDetailRequest(currentRequest)) return;
         renderHistoryOnly(identifier, history, recordId);
         if (history.length === 0) {
           setStatus(`No hay historial asociado a ${identifier}.`, "error");
@@ -473,7 +479,7 @@ export function mountUnitsView(): {
       renderRows();
       await openDetails(unit, recordId, true);
     } catch (error: unknown) {
-      if (currentRequest !== requestNumber) return;
+      if (!requestGuard.isCurrentDetailRequest(currentRequest)) return;
       setStatus(messageFor(error), "error");
       detailAnnouncement.textContent = `No se pudo abrir el registro ${recordId ?? identifier}.`;
       detail.replaceChildren();
@@ -481,12 +487,13 @@ export function mountUnitsView(): {
       failure.className = "detail-warning";
       failure.textContent = messageFor(error);
       detail.append(failure);
+    } finally {
+      if (requestGuard.isCurrentDetailRequest(currentRequest)) detail.removeAttribute("aria-busy");
     }
   }
 
   async function refresh(): Promise<void> {
-    const currentRefresh = ++refreshRequestNumber;
-    requestNumber += 1;
+    const currentRefresh = requestGuard.beginRefresh();
     refreshButton.disabled = true;
     refreshButton.setAttribute("aria-busy", "true");
     detail.setAttribute("aria-busy", "true");
@@ -502,7 +509,7 @@ export function mountUnitsView(): {
         inventoryIpc.listHandlingUnits(true),
         inventoryIpc.listLocations(true),
       ]);
-      if (currentRefresh !== refreshRequestNumber) return;
+      if (!requestGuard.canApplyRefreshResult(currentRefresh)) return;
       units = nextUnits;
       locations = nextLocations;
       loadFailed = false;
@@ -528,24 +535,24 @@ export function mountUnitsView(): {
         detailAnnouncement.textContent = "Lista de unidades actualizada.";
       }
     } catch (error: unknown) {
-      if (currentRefresh !== refreshRequestNumber) return;
+      if (!requestGuard.canApplyRefreshResult(currentRefresh)) return;
       units = [];
       locations = [];
       loadFailed = true;
       renderRows();
-      detail.replaceChildren();
       const message = messageFor(error);
+      detail.replaceChildren();
       const failure = document.createElement("p");
       failure.className = "detail-warning";
       failure.textContent = `No se pudo actualizar el detalle: ${message}`;
       detail.append(failure);
-      setStatus(message, "error");
       detailAnnouncement.textContent = `No se pudo cargar la lista de unidades: ${message}`;
+      setStatus(message, "error");
     } finally {
-      if (currentRefresh === refreshRequestNumber) {
+      if (requestGuard.isLatestRefresh(currentRefresh)) {
         refreshButton.disabled = false;
         refreshButton.removeAttribute("aria-busy");
-        detail.removeAttribute("aria-busy");
+        if (requestGuard.canApplyRefreshResult(currentRefresh)) detail.removeAttribute("aria-busy");
       }
     }
   }
