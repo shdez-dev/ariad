@@ -1,4 +1,5 @@
 import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc";
+import { createAlertsRefreshGuard } from "../lib/alerts-refresh-guard";
 import { isSimulatedSource, movementOccurredLabel } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -46,7 +47,7 @@ export function mountAlertsView(): {
   const list = requiredElement<HTMLElement>("#alerts-list");
   const refreshButton = requiredElement<HTMLButtonElement>("#alerts-refresh");
   let alerts: AlertDto[] = [];
-  let requestNumber = 0;
+  const refreshGuard = createAlertsRefreshGuard();
   let loadFailed = false;
   let expandedRecordAlertId: string | null = null;
 
@@ -197,6 +198,7 @@ export function mountAlertsView(): {
     setStatus(`Marcando como revisada la alerta “${alert.kind}”…`);
     try {
       const updated = await inventoryIpc.markAlertReviewed(alert.id);
+      refreshGuard.invalidate();
       alerts = alerts.map((item) => item.id === updated.id ? updated : item);
       render();
       setStatus(`Alerta “${updated.kind}” marcada como revisada.`, "success");
@@ -213,12 +215,14 @@ export function mountAlertsView(): {
   }
 
   async function refresh(): Promise<void> {
-    const currentRequest = ++requestNumber;
+    const request = refreshGuard.begin();
     refreshButton.disabled = true;
+    refreshButton.setAttribute("aria-busy", "true");
+    list.setAttribute("aria-busy", "true");
     setStatus("Consultando alertas…");
     try {
       const nextAlerts = await inventoryIpc.listAlerts();
-      if (currentRequest !== requestNumber) return;
+      if (!refreshGuard.canApply(request)) return;
       alerts = nextAlerts;
       loadFailed = false;
       render();
@@ -226,13 +230,17 @@ export function mountAlertsView(): {
         ? `${alerts.length} ${alerts.length === 1 ? "alerta cargada" : "alertas cargadas"}.`
         : "No hay alertas persistidas para mostrar.");
     } catch (error: unknown) {
-      if (currentRequest !== requestNumber) return;
-      alerts = [];
+      if (!refreshGuard.canApply(request)) return;
+      // Keep the last loaded list so a failed refresh doesn't hide a concurrent review.
       loadFailed = true;
       render();
       setStatus(messageFor(error), "error");
     } finally {
-      if (currentRequest === requestNumber) refreshButton.disabled = false;
+      if (refreshGuard.isLatest(request)) {
+        refreshButton.disabled = false;
+        refreshButton.removeAttribute("aria-busy");
+        list.removeAttribute("aria-busy");
+      }
     }
   }
 

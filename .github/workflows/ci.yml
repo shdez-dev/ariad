@@ -60,6 +60,9 @@ jobs:
       - name: Test UI accessibility labels
         run: npm run test:accessibility
 
+      - name: Test alert refresh concurrency
+        run: npm run test:alerts
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 

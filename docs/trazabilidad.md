@@ -154,6 +154,10 @@ La corrección elimina el breve intervalo en que seguía visible un detalle ante
 
 La cronología de unidades y el detalle de alertas muestran «Fecha simulada» para `occurredAtMs` cuando el origen del evento es `simulator`; la hora de `recordedAtMs` se sigue rotulando como «registrado». Los eventos de otras fuentes conservan «Ocurrido». Esto aclara que la fecha determinista pertenece al escenario de demostración y no a la hora real de registro. La prueba del modelo comprueba ambos rótulos y el caso de fuente vacía. `npm run build` y las cinco suites frontend (17 pruebas) pasan. La CI Windows `43281392290` pasó compilación, pruebas, Clippy, benchmark y build/validación del instalador NSIS. Publicó el artefacto `ariadna-windows-nsis-6eced46913ce40d9396743fae9d13860c071c92d` (2.367.732 bytes, ID `13973431744`). La revisión visual de la etiqueta todavía está pendiente; ARD-15 continúa en progreso.
 
+## Consistencia al revisar alertas, ARD-14
+
+Una respuesta de carga que comenzó antes de marcar una alerta como revisada ya no puede sobrescribir ese cambio en la interfaz. El guard de refresco compara tanto el identificador de la solicitud más reciente como la versión de los datos tras una mutación; el botón y la lista anuncian `aria-busy` durante la consulta. Si la recarga falla, se conserva la última lista conocida para que un error de lectura no oculte una revisión que sí se confirmó. Dos pruebas cubren la invalidación por revisión y la precedencia del refresco más reciente. Verificación local: build y seis suites frontend (19 pruebas) pasan. La inspección visual y la revisión de lector de pantalla siguen pendientes; ARD-14 permanece en progreso.
+
 ## Pendientes de aceptación visual de ARD-11 a ARD-15
 
 Las suites automatizadas respaldan modelos, validadores, casos de uso, persistencia e IPC, pero no certifican la presentación ni los recorridos en ventana. Mantener las cinco tarjetas abiertas hasta repetir estos puntos en la versión candidata y conservar evidencia legible:
