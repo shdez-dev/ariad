@@ -1,5 +1,5 @@
 import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc";
-import { createAlertsRefreshGuard } from "../lib/alerts-refresh-guard";
+import { createAlertsViewState } from "../lib/alerts-view-state";
 import { isSimulatedSource, movementOccurredLabel } from "../lib/simulator-model";
 
 function requiredElement<T extends Element>(selector: string): T {
@@ -46,9 +46,7 @@ export function mountAlertsView(): {
   const status = requiredElement<HTMLElement>("#alerts-status");
   const list = requiredElement<HTMLElement>("#alerts-list");
   const refreshButton = requiredElement<HTMLButtonElement>("#alerts-refresh");
-  let alerts: AlertDto[] = [];
-  const refreshGuard = createAlertsRefreshGuard();
-  let loadFailed = false;
+  const viewState = createAlertsViewState();
   let expandedRecordAlertId: string | null = null;
 
   function setStatus(message: string, kind: "neutral" | "success" | "error" = "neutral"): void {
@@ -57,6 +55,7 @@ export function mountAlertsView(): {
   }
 
   function render(): void {
+    const { alerts, loadFailed } = viewState.snapshot();
     list.replaceChildren();
     if (alerts.length === 0) {
       const empty = document.createElement("div");
@@ -198,8 +197,7 @@ export function mountAlertsView(): {
     setStatus(`Marcando como revisada la alerta “${alert.kind}”…`);
     try {
       const updated = await inventoryIpc.markAlertReviewed(alert.id);
-      refreshGuard.invalidate();
-      alerts = alerts.map((item) => item.id === updated.id ? updated : item);
+      viewState.applyReviewed(updated);
       render();
       setStatus(`Alerta “${updated.kind}” marcada como revisada.`, "success");
       const card = [...list.querySelectorAll<HTMLElement>("[data-alert-id]")]
@@ -215,28 +213,26 @@ export function mountAlertsView(): {
   }
 
   async function refresh(): Promise<void> {
-    const request = refreshGuard.begin();
+    const request = viewState.beginRefresh();
     refreshButton.disabled = true;
     refreshButton.setAttribute("aria-busy", "true");
     list.setAttribute("aria-busy", "true");
     setStatus("Consultando alertas…");
     try {
       const nextAlerts = await inventoryIpc.listAlerts();
-      if (!refreshGuard.canApply(request)) return;
-      alerts = nextAlerts;
-      loadFailed = false;
+      if (!viewState.applyRefreshSuccess(request, nextAlerts)) return;
+      const { alerts } = viewState.snapshot();
       render();
       setStatus(alerts.length
         ? `${alerts.length} ${alerts.length === 1 ? "alerta cargada" : "alertas cargadas"}.`
         : "No hay alertas persistidas para mostrar.");
     } catch (error: unknown) {
-      if (!refreshGuard.canApply(request)) return;
+      if (!viewState.applyRefreshFailure(request)) return;
       // Keep the last loaded list so a failed refresh doesn't hide a concurrent review.
-      loadFailed = true;
       render();
       setStatus(messageFor(error), "error");
     } finally {
-      if (refreshGuard.isLatest(request)) {
+      if (viewState.isLatest(request)) {
         refreshButton.disabled = false;
         refreshButton.removeAttribute("aria-busy");
         list.removeAttribute("aria-busy");
