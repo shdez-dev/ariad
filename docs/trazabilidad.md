@@ -223,3 +223,9 @@ La recarga de productos, unidades y ubicaciones posterior a recepción, asignaci
 El incremento `d77b84fdfa5246771d2845ce3fec875037a84d90` pasó CI Windows [43328682096](https://github.com/shdez-dev/ariad/actions/runs/43328682096) en 5m24s. El workflow validó la compilación, suites frontend y Rust, formato, Clippy, benchmark, el instalador y su verificación automatizada; publicó `ariadna-windows-nsis-d77b84fdfa5246771d2845ce3fec875037a84d90` (2,26 MB; SHA-256 `919fcfbf0c94a09432f2c46d74900d96950fe61093a5c8d06240620eafc4d9ff`).
 
 ARD-12 permanece abierta. Falta la aceptación integrada en la ventana Tauri de los flujos de catálogo y unidades, especialmente referencia/historial tras desactivar, errores reales recibidos por IPC, teclado, foco, lector de pantalla y renderizado de estados en la candidata.
+
+## Notificación de cambios después de escrituras IPC, ARD-11, ARD-13 y ARD-14
+
+`callInventoryChange` emite `ariadna:inventory-changed` únicamente después de que el comando IPC de escritura devuelve un resultado confirmado. Se añadieron pruebas con IPC sustituido que verifican que `receive_unit` emite una sola notificación tras el éxito y que un rechazo estructurado, con código e identificador de operación, no la emite. Esto protege el contrato que usan el mapa, Unidades, búsqueda y alertas para solicitar sus recargas.
+
+La verificación local pasó: `npm run build`, las nueve suites frontend (64 pruebas) y `git diff --check`. Las pruebas comprueban el contrato de la capa IPC; no sustituyen una prueba integrada de la ventana Tauri ni la aceptación visual de los refrescos posteriores a cada operación. El CI Windows del incremento está pendiente; ARD-11, ARD-13, ARD-14 y ARD-25 permanecen abiertas.
