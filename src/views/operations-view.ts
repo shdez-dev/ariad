@@ -8,17 +8,17 @@ import {
   type MovementWriteDto,
   type ProductDto,
   type ReceiveLineInput,
-} from "../lib/ipc";
+} from "../lib/ipc.ts";
 import {
   activePositions,
   getLocationPath,
   storedUnits,
   unitsAwaitingStorage,
-} from "../lib/catalog-model";
+} from "../lib/catalog-model.ts";
 import {
   createLatestRefreshCoordinator,
   type LatestRefreshResult,
-} from "../lib/latest-refresh-coordinator";
+} from "../lib/latest-refresh-coordinator.ts";
 
 const MAX_RECEIVE_LINES = 100;
 const MAX_LOT_CODE_LENGTH = 120;

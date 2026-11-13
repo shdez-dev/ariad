@@ -7,6 +7,7 @@
     "build": "tsc && vite build",
     "test:map": "node --experimental-strip-types --test tests/warehouse-map.test.ts",
     "test:operations": "node --experimental-strip-types --test tests/operations-refresh.test.ts",
+    "test:operations-view": "node --experimental-strip-types --test tests/operations-view.test.ts",
     "test:units-view": "node --experimental-strip-types --test tests/units-view-request-guard.test.ts",
     "test:catalog-views": "node --experimental-strip-types --test tests/catalog-edit-request-guard.test.ts",
     "test:catalog": "node --experimental-strip-types --test tests/catalog-model.test.ts",

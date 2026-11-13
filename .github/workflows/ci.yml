@@ -51,6 +51,9 @@ jobs:
       - name: Test operation refresh concurrency
         run: npm run test:operations
 
+      - name: Test operation view retry and confirmation states
+        run: npm run test:operations-view
+
       - name: Test units view request concurrency
         run: npm run test:units-view
 
