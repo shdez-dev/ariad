@@ -63,6 +63,11 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
     status.dataset.kind = kind;
   }
 
+  function setBusy(element: HTMLElement, busy: boolean): void {
+    if (busy) element.setAttribute("aria-busy", "true");
+    else element.removeAttribute("aria-busy");
+  }
+
   function showEmptyDetail(title: string, message: string): void {
     detail.replaceChildren();
     const wrapper = document.createElement("div");
@@ -98,12 +103,6 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "search-result-button";
-        button.setAttribute(
-          "aria-label",
-          result.kind === "handling_unit"
-            ? `Abrir historial de ${result.title}`
-            : `Ver detalle de ${result.title}`,
-        );
         const copy = document.createElement("span");
         copy.className = "search-result-copy";
         const title = document.createElement("strong");
@@ -204,6 +203,7 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
       return;
     }
     const currentRequest = ++requestNumber;
+    setBusy(detail, true);
     showEmptyDetail("Cargando detalle…", "Consultando el registro local.");
     try {
       if (result.kind === "product") {
@@ -230,6 +230,8 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
       if (currentRequest !== requestNumber) return;
       showEmptyDetail("No se pudo cargar el detalle", messageFor(error));
       setStatus(messageFor(error), "error");
+    } finally {
+      if (currentRequest === requestNumber) setBusy(detail, false);
     }
   }
 
@@ -240,12 +242,16 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
       results = [];
       loadFailed = false;
       waitingForSearch = false;
+      setBusy(resultsElement, false);
+      setBusy(detail, false);
       renderResults();
       showEmptyDetail("Selecciona un resultado", "Los datos se consultan desde SQLite mediante IPC.");
       setStatus("Escribe un término para consultar los datos locales.");
       return;
     }
     waitingForSearch = true;
+    setBusy(resultsElement, true);
+    setBusy(detail, true);
     setStatus("Buscando en productos, unidades y ubicaciones…");
     showEmptyDetail("Buscando…", "Consultando el inventario persistido.");
     try {
@@ -254,6 +260,8 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
       results = nextResults;
       loadFailed = false;
       waitingForSearch = false;
+      setBusy(resultsElement, false);
+      setBusy(detail, false);
       renderResults();
       showEmptyDetail("Selecciona un resultado", "El detalle se consultará desde el registro local.");
       setStatus(`${results.length} ${results.length === 1 ? "resultado" : "resultados"} para “${query}”.`);
@@ -262,6 +270,8 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
       results = [];
       loadFailed = true;
       waitingForSearch = false;
+      setBusy(resultsElement, false);
+      setBusy(detail, false);
       renderResults();
       showEmptyDetail("Búsqueda no disponible", messageFor(error));
       setStatus(messageFor(error), "error");
@@ -274,6 +284,8 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
     results = [];
     loadFailed = false;
     waitingForSearch = true;
+    setBusy(resultsElement, true);
+    setBusy(detail, true);
     renderResults();
     setStatus("Actualizando búsqueda…");
     showEmptyDetail("Esperando búsqueda…", "Los resultados se consultan desde los datos locales.");
