@@ -66,6 +66,9 @@ jobs:
       - name: Test IPC errors
         run: npm run test:ipc
 
+      - name: Test search detail availability
+        run: npm run test:search
+
       - name: Test UI accessibility labels
         run: npm run test:accessibility
 

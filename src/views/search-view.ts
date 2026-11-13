@@ -2,8 +2,8 @@ import {
   AriadnaIpcError,
   inventoryIpc,
   type InventorySearchResultDto,
-} from "../lib/ipc";
-import { locationKindLabels } from "../lib/catalog-model";
+} from "../lib/ipc.ts";
+import { locationKindLabels } from "../lib/catalog-model.ts";
 
 type SearchKind = InventorySearchResultDto["kind"];
 
@@ -211,6 +211,7 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
         if (currentRequest !== requestNumber) return;
         if (!product) {
           showEmptyDetail("Producto no disponible", "Actualiza la búsqueda para volver a consultar el catálogo.");
+          setStatus("El producto ya no está disponible. Actualiza la búsqueda para volver a consultar el catálogo.", "error");
           return;
         }
         renderProductDetail(product);
@@ -219,6 +220,7 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
         if (currentRequest !== requestNumber) return;
         if (!location) {
           showEmptyDetail("Ubicación no disponible", "Actualiza la búsqueda para volver a consultar el catálogo.");
+          setStatus("La ubicación ya no está disponible. Actualiza la búsqueda para volver a consultar el catálogo.", "error");
           return;
         }
         renderLocationDetail(location);
