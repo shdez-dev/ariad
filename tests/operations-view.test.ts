@@ -327,6 +327,14 @@ test("el reintento de traslado conserva evento, origen y destino", async () => {
       correctionReason: null,
     }],
   }, async (elements) => {
+    const moveTab = [...document.querySelectorAll<HTMLButtonElement>("[data-operation-tab]")]
+      .find((tab) => tab.dataset.operationTab === "move");
+    assert.ok(moveTab, "la vista debe exponer la pestaña de traslado");
+    moveTab.dispatch("click");
+    const movePanel = [...document.querySelectorAll<HTMLElement>("[data-operation-panel]")]
+      .find((panel) => panel.dataset.operationPanel === "move");
+    assert.ok(movePanel);
+    assert.equal(movePanel.hidden, false, "la pestaña debe mostrar el formulario de traslado");
     elements.get("#move-unit")!.value = unit.id;
     elements.get("#move-destination")!.value = "position-b";
     elements.get("#move-operation-form")!.dispatch("submit");
