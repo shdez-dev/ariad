@@ -189,9 +189,12 @@ async function withOperationsView(
   }
 }
 
-async function flushPromises(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await Promise.resolve();
+async function waitFor(condition: () => boolean, description: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`Tiempo de espera agotado: ${description}`);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function prepareReceipt(elements: Map<string, FakeElement>): void {
@@ -236,16 +239,18 @@ test("reintenta una recepción incierta con el mismo identificador y payload y r
   }, async (elements) => {
     prepareReceipt(elements);
     elements.get("#receive-operation-form")!.dispatch("submit");
-    await flushPromises();
 
     const retry = elements.get("#operation-retry")!;
+    await waitFor(() => writes.length === 1 && !retry.hidden, "aparece el reintento de recepción");
     assert.equal(retry.hidden, false, "un fallo de almacenamiento debe ofrecer un reintento explícito");
     assert.equal(elements.get("#receive-operation-fields")!.disabled, true);
     assert.match(elements.get("#operation-availability")!.textContent, /datos e identificador se conservan/);
 
     retry.dispatch("click");
-    await flushPromises();
-    await flushPromises();
+    await waitFor(
+      () => retry.hidden && elements.get("#operation-result-status")!.textContent.includes("ya estaba aplicado"),
+      "se confirma el duplicado de recepción",
+    );
 
     assert.equal(writes.length, 2);
     assert.deepEqual(writes[1], writes[0], "el reintento debe conservar todo el payload de la recepción");
@@ -270,12 +275,75 @@ test("mantiene la confirmación de Rust cuando falla la actualización posterior
   }, async (elements) => {
     prepareReceipt(elements);
     elements.get("#receive-operation-form")!.dispatch("submit");
-    await flushPromises();
-    await flushPromises();
+    await waitFor(
+      () => elements.get("#operation-result-status")!.textContent.toLocaleLowerCase("es-CL").includes("no se pudieron actualizar los selectores"),
+      "se muestra la confirmación y el fallo de recarga",
+    );
 
     assert.match(elements.get("#operation-result-status")!.textContent, /Recepción confirmada por Rust/);
     assert.match(elements.get("#operation-result-status")!.textContent, /no se pudieron actualizar los selectores/i);
     assert.equal(elements.get("#receive-operation-fields")!.disabled, true, "los formularios dependientes deben bloquearse con datos obsoletos");
     assert.equal(elements.get("#operation-retry")!.hidden, true, "una escritura confirmada no debe ofrecerse para reintento incierto");
+  });
+});
+
+test("el reintento de traslado conserva evento, origen y destino", async () => {
+  const unit = {
+    id: "unit-7",
+    label: "Pallet de prueba",
+    status: "stored" as const,
+    currentLocationId: "position-a",
+    lines: [{ sku: "SKU-1", quantity: 2, lotCode: "LOTE-7" }],
+  };
+  const locations = [
+    { id: "position-a", code: "P-01", name: "Posición A", kind: "position" as const, parentId: null, active: true },
+    { id: "position-b", code: "P-02", name: "Posición B", kind: "position" as const, parentId: null, active: true },
+  ];
+  const writes: Array<Record<string, unknown>> = [];
+  let attempts = 0;
+  await withOperationsView({
+    listProducts: async () => products,
+    listHandlingUnits: async () => [unit],
+    listLocations: async () => locations,
+    moveUnit: async (input) => {
+      writes.push(structuredClone(input));
+      attempts += 1;
+      if (attempts === 1) throw new AriadnaIpcError({ code: "storage", message: "No se confirmó el traslado." });
+      return { eventId: input.eventId, outcome: "duplicate" };
+    },
+    getMovementHistory: async () => [{
+      recordId: "move-record-7",
+      eventId: writes[0].eventId as string,
+      handlingUnitId: unit.id,
+      kind: "moved",
+      originLocationId: "position-a",
+      destinationLocationId: "position-b",
+      occurredAtMs: 1_800_000_000_000,
+      recordedAtMs: 1_800_000_000_100,
+      source: "manual",
+      result: "duplicate",
+      rejectionReason: null,
+      correctsEventId: null,
+      correctionReason: null,
+    }],
+  }, async (elements) => {
+    elements.get("#move-unit")!.value = unit.id;
+    elements.get("#move-destination")!.value = "position-b";
+    elements.get("#move-operation-form")!.dispatch("submit");
+
+    const retry = elements.get("#operation-retry")!;
+    await waitFor(() => writes.length === 1 && !retry.hidden, "aparece el reintento de traslado");
+    retry.dispatch("click");
+    await waitFor(
+      () => retry.hidden && elements.get("#operation-result-status")!.textContent.includes("ya estaba aplicado"),
+      "se confirma el traslado duplicado",
+    );
+
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes[1], writes[0], "el reintento debe conservar eventId, unidad, origen y destino");
+    assert.equal(writes[0].handlingUnitId, unit.id);
+    assert.equal(writes[0].originLocationId, "position-a");
+    assert.equal(writes[0].destinationLocationId, "position-b");
+    assert.match(elements.get("#operation-history-details")!.textContent, /Duplicado, sin repetir efectos/);
   });
 });
