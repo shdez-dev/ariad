@@ -7,6 +7,13 @@ export type LocationTreeNode = {
 
 export type PositionState = "free" | "occupied" | "inactive" | "inconsistent";
 
+export function formatPositionAccessibleLabel(
+  position: Pick<LocationDto, "code" | "name">,
+  stateLabel: string,
+): string {
+  return `${position.code}, ${position.name}, ${stateLabel}. Consultar detalle de la posición.`;
+}
+
 export type WarehouseMapModel = {
   zones: LocationTreeNode[];
   unassigned: LocationTreeNode[];

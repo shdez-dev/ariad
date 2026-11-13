@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { HandlingUnitDto, LocationDto, LocationKind } from "../src/lib/ipc.ts";
-import { buildWarehouseMap, getPositionState } from "../src/lib/warehouse-map.ts";
+import { buildWarehouseMap, formatPositionAccessibleLabel, getPositionState } from "../src/lib/warehouse-map.ts";
 import { createWarehouseMapRefreshGuard } from "../src/lib/warehouse-map-refresh-guard.ts";
 
 function location(
@@ -86,6 +86,13 @@ test("señala una posición con más de una unidad como inconsistente", () => {
   const position = model.locationsById.get("p-1")!.location;
   assert.equal(getPositionState(position, model.unitsByLocation), "inconsistent");
   assert.equal(model.summary.occupiedPositionCount, 1);
+});
+
+test("el nombre accesible de una posición incluye código, nombre y estado", () => {
+  assert.equal(
+    formatPositionAccessibleLabel(location("p-1", "position", "rack-1"), "Ocupada"),
+    "p-1, Nombre p-1, Ocupada. Consultar detalle de la posición.",
+  );
 });
 
 test("una recarga invalida el detalle de posición que seguía pendiente", () => {

@@ -3,6 +3,7 @@ import { locationKindLabels } from "../lib/catalog-model";
 import { createWarehouseMapRefreshGuard } from "../lib/warehouse-map-refresh-guard";
 import {
   buildWarehouseMap,
+  formatPositionAccessibleLabel,
   getPositionState,
   type LocationTreeNode,
   type PositionState,
@@ -113,7 +114,7 @@ function renderPosition(node: LocationTreeNode): HTMLButtonElement {
   button.setAttribute("aria-pressed", String(position.id === selectedPositionId));
   button.setAttribute(
     "aria-label",
-    `${position.code}, ${stateLabels[state]}. Consultar detalle de la posición.`,
+    formatPositionAccessibleLabel(position, stateLabels[state]),
   );
   button.append(
     createElement("span", "position-code", position.code),
