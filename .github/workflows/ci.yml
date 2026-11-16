@@ -105,6 +105,29 @@ jobs:
       - name: Build Tauri Windows installer
         run: npm run tauri -- build
 
+      - name: Install Tauri WebDriver
+        run: cargo install tauri-driver --locked
+
+      - name: Install matching Edge WebDriver
+        shell: pwsh
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          & "$env:USERPROFILE\.cargo\bin\msedgedriver-tool.exe"
+          $PWD.Path >> $env:GITHUB_PATH
+
+      - name: Install Tauri end-to-end test dependencies
+        run: npm ci --prefix e2e-tests
+
+      - name: Run Tauri end-to-end acceptance
+        shell: pwsh
+        env:
+          ARIADNA_APP_BINARY: ${{ github.workspace }}/src-tauri/target/release/ariadna.exe
+          ARIADNA_E2E_ARTIFACTS: ${{ runner.temp }}
+          APPDATA: ${{ runner.temp }}/ariadna-e2e/appdata
+        run: |
+          New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
+          npm test --prefix e2e-tests
+
       - name: Verify NSIS install, launch, and uninstall
         shell: pwsh
         env:
@@ -123,5 +146,6 @@ jobs:
           path: |
             src-tauri/target/release/bundle/nsis/*-setup.exe
             ${{ runner.temp }}/ariadna-ard-22-verification.md
+            ${{ runner.temp }}/ariadna-tauri-e2e-*.png
           if-no-files-found: warn
           retention-days: 14

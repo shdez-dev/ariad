@@ -1,0 +1,11 @@
+{
+  "name": "ariadna-tauri-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "4.34.0"
+  }
+}

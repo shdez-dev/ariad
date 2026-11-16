@@ -390,3 +390,9 @@ Verificación local: la prueba focal falla antes del arreglo y pasa después; `n
 Las pruebas de catálogo reproducen el caso para productos y ubicaciones: Rust confirma la desactivación, la consulta posterior falla y el re-render elimina el botón que tenía el foco. Ambas vistas ahora enfocan Actualizar cuando la recarga termina cargada o fallida, y conservan el foco actual si otra recarga la desplazó.
 
 Verificación local: `npm run test:catalog-views` (34 pruebas), `npm test` (15 suites, 102 pruebas), `npm run build` y `git diff --check` pasan. Las pruebas instrumentan llamadas de foco en un DOM mínimo; ARD-12 permanece abierta hasta la aceptación visual y de teclado/lector de pantalla en Tauri.
+
+## Automatizar aceptación integrada de escritorio, ARD-11 a ARD-15 y ARD-25
+
+Se incorpora `e2e-tests/inventory.e2e.test.js`, ejecutado contra la build de Windows real en GitHub Actions con Selenium y `tauri-driver`. El recorrido activa el Simulador con teclado, ejecuta por IPC una recepción, asignación, traslado y despacho, abre la unidad y comprueba sus cuatro movimientos y el estado final. Después crea una anomalía de etiqueta desconocida, verifica que la bandeja muestre el intento exacto y persiste su revisión. El runner usa un `APPDATA` temporal y solo datos sintéticos; guarda capturas de resultado como artefactos de CI. Esta prueba integrada cubre WebView, aplicación Rust y SQLite sin lanzar Ariadna en el computador de desarrollo.
+
+La guía de [WebDriver de Tauri](https://v2.tauri.app/develop/tests/webdriver/) y su [configuración de CI](https://v2.tauri.app/develop/tests/webdriver/ci/) documentan la ruta para Windows. Evidencia local: `node --check e2e-tests/inventory.e2e.test.js`, importación del controlador Selenium y `git diff --check` pasan; el resultado del primer CI WebDriver queda pendiente. No se usa esta cobertura automatizada como sustituto de lector de pantalla manual ni se cierra ARD-25 con un recorrido parcial.
