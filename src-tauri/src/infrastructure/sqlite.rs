@@ -4097,9 +4097,13 @@ mod tests {
         assert!(by_location.iter().any(|result| {
             result.kind == InventorySearchKind::Location && result.id == "position-1"
         }));
-        assert!(by_location.iter().any(|result| {
-            result.kind == InventorySearchKind::HandlingUnit && result.id == "unit-search"
-        }));
+        let unit_at_location = by_location
+            .iter()
+            .find(|result| {
+                result.kind == InventorySearchKind::HandlingUnit && result.id == "unit-search"
+            })
+            .expect("la búsqueda por código de posición debe encontrar la unidad almacenada");
+        assert!(unit_at_location.subtitle.contains("P1 · Posición"));
         assert!(search.execute("   ").await.unwrap().is_empty());
         database.close().await;
     }

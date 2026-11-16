@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use thiserror::Error;
@@ -825,6 +825,11 @@ impl SearchInventory {
         let products = self.repository.list_products(false).await?;
         let units = self.repository.list_handling_units(true).await?;
         let locations = self.repository.list_locations(false).await?;
+        // Resolve each unit location by ID instead of scanning all locations per unit.
+        let locations_by_id = locations
+            .iter()
+            .map(|location| (location.id.as_str(), location))
+            .collect::<HashMap<_, _>>();
         let mut results = Vec::new();
 
         for product in products {
@@ -850,7 +855,7 @@ impl SearchInventory {
             let location = unit
                 .current_location_id
                 .as_deref()
-                .and_then(|id| locations.iter().find(|location| location.id == id));
+                .and_then(|id| locations_by_id.get(id).copied());
             let line_matches: Vec<&str> = unit.lines.iter().map(|line| line.sku.as_str()).collect();
             let mut searchable = vec![unit.id.as_str(), unit.label.as_str()];
             if let Some(location_id) = unit.current_location_id.as_deref() {
@@ -881,6 +886,7 @@ impl SearchInventory {
             }
         }
 
+        drop(locations_by_id);
         for location in locations {
             if contains_term(
                 &query,
