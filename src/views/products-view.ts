@@ -211,7 +211,7 @@ export function mountProductsView(): { refresh: () => Promise<RefreshResult> } {
       } else if (result.kind === "failed") {
         setStatus(`Producto ${product.sku} desactivado, pero no se pudo actualizar la lista: ${result.message}`, "error");
       }
-      if (result.kind === "loaded") refreshButton.focus();
+      if (result.kind !== "superseded") refreshButton.focus();
     } catch (error: unknown) {
       if (isCurrentUserIntent(actionIntent)) setStatus(messageFor(error), "error");
     }

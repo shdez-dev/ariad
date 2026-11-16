@@ -384,3 +384,9 @@ El arreglo de foco del commit `8e162b7` pasó CI Windows [43969046565](https://g
 Una prueba reproduce que, con un detalle de producto aún pendiente, abrir una unidad desde los resultados conservaba `aria-busy` y permitía que la respuesta antigua sobrescribiera el mensaje de navegación. `search-view.ts` ahora invalida esa consulta, limpia el estado ocupado, muestra que se abrirá la cronología y emite el evento con el ID exacto de la unidad. La respuesta antigua ya no modifica el detalle ni el estado.
 
 Verificación local: la prueba focal falla antes del arreglo y pasa después; `npm run test:search` (7 pruebas), `npm test` (15 suites, 100 pruebas), `npm run build` y `git diff --check` pasan. La prueba usa DOM e IPC simulados y no sustituye la aceptación integrada en Tauri.
+
+## Recuperar el foco si falla la recarga posterior a desactivar, ARD-12
+
+Las pruebas de catálogo reproducen el caso para productos y ubicaciones: Rust confirma la desactivación, la consulta posterior falla y el re-render elimina el botón que tenía el foco. Ambas vistas ahora enfocan Actualizar cuando la recarga termina cargada o fallida, y conservan el foco actual si otra recarga la desplazó.
+
+Verificación local: `npm run test:catalog-views` (34 pruebas), `npm test` (15 suites, 102 pruebas), `npm run build` y `git diff --check` pasan. Las pruebas instrumentan llamadas de foco en un DOM mínimo; ARD-12 permanece abierta hasta la aceptación visual y de teclado/lector de pantalla en Tauri.

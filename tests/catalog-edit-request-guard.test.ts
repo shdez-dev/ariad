@@ -422,6 +422,32 @@ for (const kind of ["products", "locations"] as const) {
     });
   });
 
+  test(kind + ": tras desactivar y fallar la recarga, devuelve el foco a Actualizar", async () => {
+    const deactivateMethod = isProducts ? "deactivateProduct" : "deactivateLocation";
+    let listCalls = 0;
+    await withMountedView(kind, {
+      [listMethod]: async () => {
+        listCalls += 1;
+        if (listCalls === 1) return records;
+        throw new Error("SQLite no respondió después de desactivar.");
+      },
+      [deactivateMethod]: async () => records[0],
+    }, async (elements, view) => {
+      await view.refresh();
+      const deactivateButton = renderedDeactivationButtons(elements)[0];
+      deactivateButton.focus();
+      deactivateButton.dispatch("click");
+      await flushPromises();
+      await flushPromises();
+
+      assert.equal(listCalls, 2);
+      assert.match(elements.get(statusSelector)!.textContent, /desactivad[oa], pero no se pudo actualizar la lista/);
+      assert.equal(elements.get(refreshButtonSelector)!.disabled, false);
+      assert.equal(focusedElement, elements.get(refreshButtonSelector));
+      assert.equal(elements.get(rowsSelector)!.children.some((row) => row.textContent.includes(titleFor(records[0]))), false);
+    });
+  });
+
   test(kind + ": comunica una carga pendiente y reactiva la actualización al terminar", async () => {
     const pendingList = deferred<(typeof records)[number][]>();
     await withMountedView(kind, {
