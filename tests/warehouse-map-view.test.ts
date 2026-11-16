@@ -108,12 +108,20 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   assert.fail("Tiempo agotado esperando " + label);
 }
 
-test("el refresco del mapa restaura el foco en la misma posición", async () => {
+test("el refresco restaura el foco y la selección consulta el pallet asociado", async () => {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   const previousHTMLElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
   const originalListLocations = inventoryIpc.listLocations;
   const originalListUnits = inventoryIpc.listHandlingUnits;
+  const originalGetHandlingUnit = inventoryIpc.getHandlingUnit;
+  const storedUnit: HandlingUnitDto = {
+    id: "unit-1",
+    label: "PALLET-001",
+    status: "stored",
+    currentLocationId: "position-1",
+    lines: [{ sku: "SKU-TEST", quantity: 3, lotCode: "LOT-42" }],
+  };
   const locations = [
     location("zone-1", "zone", null),
     location("aisle-1", "aisle", "zone-1"),
@@ -161,7 +169,7 @@ test("el refresco del mapa restaura el foco en la misma posición", async () => 
   Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
   Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: FakeElement });
   inventoryIpc.listLocations = async () => locations;
-  inventoryIpc.listHandlingUnits = async (): Promise<HandlingUnitDto[]> => [];
+  inventoryIpc.listHandlingUnits = async (): Promise<HandlingUnitDto[]> => [storedUnit];
 
   try {
     await import("../src/views/warehouse-map-view.ts?ard11-focus-test");
@@ -179,9 +187,56 @@ test("el refresco del mapa restaura el foco en la misma posición", async () => 
     assert.equal(fakeDocument.activeElement?.dataset.mapFocusId, "position-1");
     assert.equal(elements["#refresh-map"].disabled, false);
     assert.equal(elements["#warehouse-map"].attributes.has("aria-busy"), false);
+
+    let resolveUnitDetail: ((unit: HandlingUnitDto | null) => void) | undefined;
+    inventoryIpc.getHandlingUnit = async (id) => {
+      assert.equal(id, storedUnit.id);
+      return await new Promise((resolve) => {
+        resolveUnitDetail = resolve;
+      });
+    };
+    const refreshedPosition = map.querySelectorAll<FakeElement>("[data-position-id]")[0];
+    assert.ok(refreshedPosition.textContent.includes("Ocupada"));
+    assert.equal(
+      refreshedPosition.attributes.get("aria-label"),
+      "POSITION-1, Nombre position-1, Ocupada. Consultar detalle de la posición.",
+    );
+    refreshedPosition.dispatch("click");
+    assert.equal(refreshedPosition.attributes.get("aria-pressed"), "true");
+    assert.equal(elements["#position-details"].attributes.get("aria-busy"), "true");
+    assert.ok(elements["#position-details"].textContent.includes("Consultando el pallet"));
+    resolveUnitDetail?.(storedUnit);
+
+    await waitFor(
+      () => elements["#position-details"].textContent.includes("SKU-TEST"),
+      "el detalle del pallet asociado",
+    );
+    const detailsText = elements["#position-details"].textContent;
+    assert.ok(detailsText.includes("PALLET-001"));
+    assert.ok(detailsText.includes("unit-1"));
+    assert.ok(detailsText.includes("Almacenado"));
+    assert.ok(detailsText.includes("SKU-TEST"));
+    assert.ok(detailsText.includes("LOT-42"));
+    assert.ok(detailsText.includes("× 3"));
+    assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
+
+    inventoryIpc.getHandlingUnit = async () => {
+      throw new Error("IPC no disponible");
+    };
+    refreshedPosition.dispatch("click");
+    await waitFor(
+      () => elements["#position-details"].textContent.includes("IPC no disponible"),
+      "el error de consulta del pallet",
+    );
+    assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
+    assert.equal(
+      elements["#selection-announcement"].textContent,
+      "No se pudo consultar el pallet de la posición POSITION-1.",
+    );
   } finally {
     inventoryIpc.listLocations = originalListLocations;
     inventoryIpc.listHandlingUnits = originalListUnits;
+    inventoryIpc.getHandlingUnit = originalGetHandlingUnit;
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete (globalThis as typeof globalThis & { window?: unknown }).window;
     if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
