@@ -343,4 +343,4 @@ Verificación local: npm run test:alerts-view (7 pruebas), npm test (15 suites, 
 
 Un caso adicional deja pendiente la revisión IPC, refresca la lista hasta que la alerta desaparece y luego rechaza la escritura. La vista no intenta enfocar una tarjeta inexistente y devuelve el foco al botón Actualizar alertas.
 
-Verificación local: npm run test:alerts-view (8 pruebas), npm test (15 suites, 94 pruebas), npm run build y git diff --check pasan. El fake DOM valida la selección del destino de foco; la aceptación con WebView, teclado y lector de pantalla sigue pendiente. El CI Windows de este follow-up queda pendiente.
+Verificación local: npm run test:alerts-view (8 pruebas), npm test (15 suites, 94 pruebas), npm run build y git diff --check pasan. El fake DOM valida la selección del destino de foco; la aceptación con WebView, teclado y lector de pantalla sigue pendiente. CI Windows [43950838330](https://github.com/shdez-dev/ariad/actions/runs/43950838330) terminó success para 122c00f y publicó NSIS 2.26 MB (SHA-256 fe7c2076ba528a5ef9b10a260656b286e06b8eb1199c01213e9c2b519a1e8036).
