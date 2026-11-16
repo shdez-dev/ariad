@@ -87,11 +87,7 @@ El workflow de GitHub Actions ejecuta en Windows las pruebas frontend, el build 
 ```powershell
 npm ci
 npm run build
-npm run test:map
-npm run test:catalog
-npm run test:simulator
-npm run test:ipc
-npm run test:accessibility
+npm test
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
