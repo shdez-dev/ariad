@@ -122,11 +122,19 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
     currentLocationId: "position-1",
     lines: [{ sku: "SKU-TEST", quantity: 3, lotCode: "LOT-42" }],
   };
+  const secondStoredUnit: HandlingUnitDto = {
+    id: "unit-2",
+    label: "PALLET-002",
+    status: "stored",
+    currentLocationId: "position-2",
+    lines: [{ sku: "SKU-SECOND", quantity: 7, lotCode: "LOT-84" }],
+  };
   const locations = [
     location("zone-1", "zone", null),
     location("aisle-1", "aisle", "zone-1"),
     location("rack-1", "rack", "aisle-1"),
     location("position-1", "position", "rack-1"),
+    location("position-2", "position", "rack-1"),
   ];
   const elements: Record<string, FakeElement> = {
     "#warehouse-map": new FakeElement("div"),
@@ -169,33 +177,52 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
   Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
   Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: FakeElement });
   inventoryIpc.listLocations = async () => locations;
-  inventoryIpc.listHandlingUnits = async (): Promise<HandlingUnitDto[]> => [storedUnit];
+  inventoryIpc.listHandlingUnits = async (): Promise<HandlingUnitDto[]> => [storedUnit, secondStoredUnit];
 
   try {
     await import("../src/views/warehouse-map-view.ts?ard11-focus-test");
     const map = elements["#warehouse-map"];
-    await waitFor(() => map.querySelectorAll("[data-position-id]").length === 1, "el mapa inicial");
-    const originalPosition = map.querySelectorAll<FakeElement>("[data-position-id]")[0];
+    await waitFor(() => map.querySelectorAll("[data-position-id]").length === 2, "el mapa inicial");
+    const originalPosition = map
+      .querySelectorAll<FakeElement>("[data-position-id]")
+      .find((position) => position.dataset.positionId === "position-1");
+    assert.ok(originalPosition);
     originalPosition.focus();
 
     fakeWindow.dispatchEvent({ type: "ariadna:inventory-changed" });
 
     await waitFor(() => {
-      const refreshedPosition = map.querySelectorAll<FakeElement>("[data-position-id]")[0];
+      const refreshedPosition = map
+        .querySelectorAll<FakeElement>("[data-position-id]")
+        .find((position) => position.dataset.positionId === "position-1");
       return refreshedPosition !== originalPosition && fakeDocument.activeElement === refreshedPosition;
     }, "la restauración del foco tras el refresco");
     assert.equal(fakeDocument.activeElement?.dataset.mapFocusId, "position-1");
     assert.equal(elements["#refresh-map"].disabled, false);
     assert.equal(elements["#warehouse-map"].attributes.has("aria-busy"), false);
 
-    let resolveUnitDetail: ((unit: HandlingUnitDto | null) => void) | undefined;
+    const detailResolvers = new Map<string, (unit: HandlingUnitDto | null) => void>();
+    const requestedUnitIds: string[] = [];
+    let failNextDetailRequest = false;
     inventoryIpc.getHandlingUnit = async (id) => {
-      assert.equal(id, storedUnit.id);
+      requestedUnitIds.push(id);
+      if (failNextDetailRequest) {
+        failNextDetailRequest = false;
+        throw new Error("IPC no disponible");
+      }
       return await new Promise((resolve) => {
-        resolveUnitDetail = resolve;
+        detailResolvers.set(id, resolve);
       });
     };
-    const refreshedPosition = map.querySelectorAll<FakeElement>("[data-position-id]")[0];
+    const refreshedPositions = map.querySelectorAll<FakeElement>("[data-position-id]");
+    const refreshedPosition = refreshedPositions.find(
+      (position) => position.dataset.positionId === "position-1",
+    );
+    const secondPosition = refreshedPositions.find(
+      (position) => position.dataset.positionId === "position-2",
+    );
+    assert.ok(refreshedPosition);
+    assert.ok(secondPosition);
     assert.ok(refreshedPosition.textContent.includes("Ocupada"));
     assert.equal(
       refreshedPosition.attributes.get("aria-label"),
@@ -205,25 +232,32 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
     assert.equal(refreshedPosition.attributes.get("aria-pressed"), "true");
     assert.equal(elements["#position-details"].attributes.get("aria-busy"), "true");
     assert.ok(elements["#position-details"].textContent.includes("Consultando el pallet"));
-    resolveUnitDetail?.(storedUnit);
+    secondPosition.dispatch("click");
+    assert.equal(refreshedPosition.attributes.get("aria-pressed"), "false");
+    assert.equal(secondPosition.attributes.get("aria-pressed"), "true");
+    assert.deepEqual(requestedUnitIds, [storedUnit.id, secondStoredUnit.id]);
+    detailResolvers.get(storedUnit.id)?.(storedUnit);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(elements["#position-details"].textContent.includes("PALLET-001"), false);
+    assert.equal(elements["#position-details"].attributes.get("aria-busy"), "true");
+    detailResolvers.get(secondStoredUnit.id)?.(secondStoredUnit);
 
     await waitFor(
-      () => elements["#position-details"].textContent.includes("SKU-TEST"),
-      "el detalle del pallet asociado",
+      () => elements["#position-details"].textContent.includes("SKU-SECOND"),
+      "el detalle de la segunda posición",
     );
     const detailsText = elements["#position-details"].textContent;
-    assert.ok(detailsText.includes("PALLET-001"));
-    assert.ok(detailsText.includes("unit-1"));
+    assert.ok(detailsText.includes("PALLET-002"));
+    assert.ok(detailsText.includes("unit-2"));
     assert.ok(detailsText.includes("Almacenado"));
-    assert.ok(detailsText.includes("SKU-TEST"));
-    assert.ok(detailsText.includes("LOT-42"));
-    assert.ok(detailsText.includes("× 3"));
+    assert.ok(detailsText.includes("SKU-SECOND"));
+    assert.ok(detailsText.includes("LOT-84"));
+    assert.ok(detailsText.includes("× 7"));
+    assert.equal(detailsText.includes("PALLET-001"), false);
     assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
 
-    inventoryIpc.getHandlingUnit = async () => {
-      throw new Error("IPC no disponible");
-    };
-    refreshedPosition.dispatch("click");
+    failNextDetailRequest = true;
+    secondPosition.dispatch("click");
     await waitFor(
       () => elements["#position-details"].textContent.includes("IPC no disponible"),
       "el error de consulta del pallet",
@@ -231,7 +265,7 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
     assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
     assert.equal(
       elements["#selection-announcement"].textContent,
-      "No se pudo consultar el pallet de la posición POSITION-1.",
+      "No se pudo consultar el pallet de la posición POSITION-2.",
     );
   } finally {
     inventoryIpc.listLocations = originalListLocations;
