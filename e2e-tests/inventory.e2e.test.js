@@ -80,11 +80,16 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
       .build();
     await driver.manage().setTimeouts({ implicit: 0, pageLoad: 30_000, script: 30_000 });
 
+    currentStage = "esperar que la interfaz inicial esté disponible";
+    const mapPanel = await driver.wait(
+      until.elementLocated(By.css("#map-panel")),
+      30_000,
+      "La interfaz inicial debe mostrar el mapa",
+    );
     currentStage = "esperar la carga inicial del mapa";
-    await driver.wait(async () => {
-      const mapPanel = await driver.findElement(By.css("#map-panel"));
-      return (await mapPanel.getAttribute("aria-busy")) !== "true";
-    }, 30_000, "El mapa inicial debe terminar de cargar");
+    await driver.wait(async () => (
+      (await mapPanel.getAttribute("aria-busy")) !== "true"
+    ), 30_000, "El mapa inicial debe terminar de cargar");
     assert.equal(
       await driver.findElement(By.css(".primary-nav")).getAttribute("aria-label"),
       "Secciones de Ariadna",
