@@ -67,6 +67,10 @@ class FakeElement {
     this.attributes.delete(name);
   }
 
+  hasAttribute(name: string): boolean {
+    return this.attributes.has(name);
+  }
+
   focus(): void {
     const document = globalThis.document as unknown as { activeElement: FakeElement | null };
     document.activeElement = this;
@@ -308,6 +312,8 @@ test("un movimiento confirmado refresca la ocupación y el detalle de las posici
     lines: [{ sku: "SKU-MOVED", quantity: 4, lotCode: "LOT-MOVED" }],
   };
   let units: HandlingUnitDto[] = [unit];
+  let unitReads = 0;
+  let resolveStaleRead: ((units: HandlingUnitDto[]) => void) | null = null;
   const locations = [
     location("zone-1", "zone", null),
     location("aisle-1", "aisle", "zone-1"),
@@ -316,7 +322,15 @@ test("un movimiento confirmado refresca la ocupación y el detalle de las posici
     location("position-2", "position", "rack-1"),
   ];
   inventoryIpc.listLocations = async () => locations;
-  inventoryIpc.listHandlingUnits = async () => units;
+  inventoryIpc.listHandlingUnits = async () => {
+    unitReads += 1;
+    if (unitReads === 2) {
+      return await new Promise<HandlingUnitDto[]>((resolve) => {
+        resolveStaleRead = resolve;
+      });
+    }
+    return units;
+  };
   inventoryIpc.getHandlingUnit = async (id) => units.find((candidate) => candidate.id === id) ?? null;
 
   try {
@@ -335,6 +349,8 @@ test("un movimiento confirmado refresca la ocupación y el detalle de las posici
     await waitFor(() => elements["#position-details"].textContent.includes("PALLET-MOVED"), "el detalle del pallet en el origen");
     origin.focus();
 
+    fakeWindow.dispatchEvent({ type: "ariadna:inventory-changed" });
+    await waitFor(() => unitReads === 2, "la primera actualización posterior al movimiento");
     units = [{ ...unit, currentLocationId: "position-2" }];
     fakeWindow.dispatchEvent({ type: "ariadna:inventory-changed" });
 
@@ -361,6 +377,16 @@ test("un movimiento confirmado refresca la ocupación y el detalle de las posici
     assert.match(elements["#selection-announcement"].textContent, /POSITION-1 seleccionada, libre/);
     assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
     assert.match(elements["#warehouse-summary"].textContent, /Ocupadas1/);
+
+    assert.ok(resolveStaleRead, "la primera respuesta debe seguir pendiente");
+    resolveStaleRead([unit]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(
+      map.querySelectorAll<FakeElement>("[data-position-id]")
+        .find((position) => position.dataset.positionId === "position-1")?.textContent.includes("Libre"),
+      true,
+      "la respuesta tardía del movimiento anterior no debe revertir la ocupación actual",
+    );
   } finally {
     inventoryIpc.listLocations = originalListLocations;
     inventoryIpc.listHandlingUnits = originalListUnits;

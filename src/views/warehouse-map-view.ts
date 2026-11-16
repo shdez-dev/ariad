@@ -135,10 +135,11 @@ function syncSelectedPosition(): void {
 
 function rememberMapFocus(): void {
   const activeElement = document.activeElement;
-  pendingMapFocusId =
-    activeElement instanceof HTMLElement && mapElement.contains(activeElement)
-      ? activeElement.dataset.mapFocusId ?? null
-      : null;
+  if (activeElement instanceof HTMLElement && mapElement.contains(activeElement)) {
+    pendingMapFocusId = activeElement.dataset.mapFocusId ?? null;
+  } else if (!mapElement.hasAttribute("aria-busy")) {
+    pendingMapFocusId = null;
+  }
 }
 
 function restoreMapFocus(): void {
