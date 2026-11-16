@@ -206,7 +206,7 @@ function renderMap(model: WarehouseMapModel): void {
       createElement(
         "p",
         "empty-state-copy",
-        "Cuando configures zonas, pasillos, racks y posiciones, aparecerán aquí en su jerarquía. La configuración de ubicaciones se habilitará en el siguiente flujo del proyecto.",
+        "Configura zonas, pasillos, racks y posiciones en la sección Ubicaciones. Después aparecerán aquí organizadas en su jerarquía.",
       ),
     );
     mapElement.append(empty);

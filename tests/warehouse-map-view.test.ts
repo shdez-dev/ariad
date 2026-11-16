@@ -108,34 +108,10 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   assert.fail("Tiempo agotado esperando " + label);
 }
 
-test("el refresco restaura el foco y la selección consulta el pallet asociado", async () => {
+function installFakeMapEnvironment() {
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   const previousHTMLElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement");
-  const originalListLocations = inventoryIpc.listLocations;
-  const originalListUnits = inventoryIpc.listHandlingUnits;
-  const originalGetHandlingUnit = inventoryIpc.getHandlingUnit;
-  const storedUnit: HandlingUnitDto = {
-    id: "unit-1",
-    label: "PALLET-001",
-    status: "stored",
-    currentLocationId: "position-1",
-    lines: [{ sku: "SKU-TEST", quantity: 3, lotCode: "LOT-42" }],
-  };
-  const secondStoredUnit: HandlingUnitDto = {
-    id: "unit-2",
-    label: "PALLET-002",
-    status: "stored",
-    currentLocationId: "position-2",
-    lines: [{ sku: "SKU-SECOND", quantity: 7, lotCode: "LOT-84" }],
-  };
-  const locations = [
-    location("zone-1", "zone", null),
-    location("aisle-1", "aisle", "zone-1"),
-    location("rack-1", "rack", "aisle-1"),
-    location("position-1", "position", "rack-1"),
-    location("position-2", "position", "rack-1"),
-  ];
   const elements: Record<string, FakeElement> = {
     "#warehouse-map": new FakeElement("div"),
     "#map-panel": new FakeElement("section"),
@@ -176,6 +152,49 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
   Object.defineProperty(globalThis, "window", { configurable: true, value: fakeWindow });
   Object.defineProperty(globalThis, "document", { configurable: true, value: fakeDocument });
   Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: FakeElement });
+
+  return {
+    elements,
+    fakeDocument,
+    fakeWindow,
+    restore(): void {
+      if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
+      else delete (globalThis as typeof globalThis & { window?: unknown }).window;
+      if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
+      else delete (globalThis as typeof globalThis & { document?: unknown }).document;
+      if (previousHTMLElement) Object.defineProperty(globalThis, "HTMLElement", previousHTMLElement);
+      else delete (globalThis as typeof globalThis & { HTMLElement?: unknown }).HTMLElement;
+    },
+  };
+}
+
+test("el refresco restaura el foco y la selección consulta el pallet asociado", async () => {
+  const environment = installFakeMapEnvironment();
+  const { elements, fakeDocument, fakeWindow } = environment;
+  const originalListLocations = inventoryIpc.listLocations;
+  const originalListUnits = inventoryIpc.listHandlingUnits;
+  const originalGetHandlingUnit = inventoryIpc.getHandlingUnit;
+  const storedUnit: HandlingUnitDto = {
+    id: "unit-1",
+    label: "PALLET-001",
+    status: "stored",
+    currentLocationId: "position-1",
+    lines: [{ sku: "SKU-TEST", quantity: 3, lotCode: "LOT-42" }],
+  };
+  const secondStoredUnit: HandlingUnitDto = {
+    id: "unit-2",
+    label: "PALLET-002",
+    status: "stored",
+    currentLocationId: "position-2",
+    lines: [{ sku: "SKU-SECOND", quantity: 7, lotCode: "LOT-84" }],
+  };
+  const locations = [
+    location("zone-1", "zone", null),
+    location("aisle-1", "aisle", "zone-1"),
+    location("rack-1", "rack", "aisle-1"),
+    location("position-1", "position", "rack-1"),
+    location("position-2", "position", "rack-1"),
+  ];
   inventoryIpc.listLocations = async () => locations;
   inventoryIpc.listHandlingUnits = async (): Promise<HandlingUnitDto[]> => [storedUnit, secondStoredUnit];
 
@@ -271,11 +290,73 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
     inventoryIpc.listLocations = originalListLocations;
     inventoryIpc.listHandlingUnits = originalListUnits;
     inventoryIpc.getHandlingUnit = originalGetHandlingUnit;
-    if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
-    else delete (globalThis as typeof globalThis & { window?: unknown }).window;
-    if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
-    else delete (globalThis as typeof globalThis & { document?: unknown }).document;
-    if (previousHTMLElement) Object.defineProperty(globalThis, "HTMLElement", previousHTMLElement);
-    else delete (globalThis as typeof globalThis & { HTMLElement?: unknown }).HTMLElement;
+    environment.restore();
+  }
+});
+
+test("el mapa vacío indica dónde configurar las ubicaciones", async () => {
+  const environment = installFakeMapEnvironment();
+  const originalListLocations = inventoryIpc.listLocations;
+  const originalListUnits = inventoryIpc.listHandlingUnits;
+  inventoryIpc.listLocations = async () => [];
+  inventoryIpc.listHandlingUnits = async () => [];
+
+  try {
+    await import("../src/views/warehouse-map-view.ts?ard11-empty-test");
+    const map = environment.elements["#warehouse-map"];
+    await waitFor(() => map.textContent.includes("La bodega todavía no tiene ubicaciones"), "el estado vacío del mapa");
+
+    assert.ok(map.textContent.includes("Configura zonas, pasillos, racks y posiciones en la sección Ubicaciones."));
+    assert.equal(map.textContent.includes("se habilitará en el siguiente flujo del proyecto"), false);
+    assert.equal(environment.elements["#map-status"].textContent, "Sin ubicaciones configuradas.");
+    assert.equal(map.attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#map-panel"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].disabled, false);
+  } finally {
+    inventoryIpc.listLocations = originalListLocations;
+    inventoryIpc.listHandlingUnits = originalListUnits;
+    environment.restore();
+  }
+});
+
+test("un error al cargar el mapa libera los controles y permite reintentar", async () => {
+  const environment = installFakeMapEnvironment();
+  const originalListLocations = inventoryIpc.listLocations;
+  const originalListUnits = inventoryIpc.listHandlingUnits;
+  let locationRequests = 0;
+  inventoryIpc.listLocations = async () => {
+    locationRequests += 1;
+    if (locationRequests === 1) throw new Error("SQLite no disponible");
+    return [location("zone-1", "zone", null)];
+  };
+  inventoryIpc.listHandlingUnits = async () => [];
+
+  try {
+    await import("../src/views/warehouse-map-view.ts?ard11-retry-test");
+    const map = environment.elements["#warehouse-map"];
+    await waitFor(() => map.textContent.includes("SQLite no disponible"), "el error inicial del mapa");
+
+    assert.equal(environment.elements["#map-status"].textContent, "No fue posible actualizar los datos.");
+    assert.equal(environment.elements["#selection-announcement"].textContent, "No se pudo actualizar el mapa de la bodega.");
+    assert.equal(map.attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#map-panel"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].disabled, false);
+
+    environment.elements["#refresh-map"].dispatch("click");
+    await waitFor(() => map.textContent.includes("Nombre zone-1"), "la recuperación del mapa tras reintentar");
+
+    assert.equal(locationRequests, 2);
+    assert.equal(map.textContent.includes("SQLite no disponible"), false);
+    assert.equal(environment.elements["#warehouse-summary"].children.length, 4);
+    assert.equal(map.attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#map-panel"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].attributes.has("aria-busy"), false);
+    assert.equal(environment.elements["#refresh-map"].disabled, false);
+  } finally {
+    inventoryIpc.listLocations = originalListLocations;
+    inventoryIpc.listHandlingUnits = originalListUnits;
+    environment.restore();
   }
 });
