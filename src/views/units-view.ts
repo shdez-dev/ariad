@@ -237,16 +237,16 @@ export function mountUnitsView(): {
     historyTitle.className = "detail-section-title movement-history-title";
     historyTitle.textContent = "Cronología de movimientos";
     detail.append(historyTitle);
-    if (history === null) {
-      const loadingText = document.createElement("p");
-      loadingText.className = "detail-muted";
-      loadingText.textContent = "Consultando historial persistido…";
-      detail.append(loadingText);
-    } else if (historyError) {
+    if (historyError) {
       const errorText = document.createElement("p");
       errorText.className = "detail-warning";
       errorText.textContent = historyError;
       detail.append(errorText);
+    } else if (history === null) {
+      const loadingText = document.createElement("p");
+      loadingText.className = "detail-muted";
+      loadingText.textContent = "Consultando historial persistido…";
+      detail.append(loadingText);
     } else if (history.length === 0) {
       const empty = document.createElement("p");
       empty.className = "detail-muted";

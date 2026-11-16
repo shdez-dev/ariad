@@ -163,6 +163,16 @@ async function waitFor(condition: () => boolean, description: string): Promise<v
   }
 }
 
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function location(
   id: string,
   code: string,
@@ -323,6 +333,7 @@ test("abre y enfoca el intento exacto aunque no exista una ficha de unidad", asy
     },
   }, async (elements, view) => {
     await view.refresh();
+    assert.match(elements["#units-table-body"].textContent, /Aún no hay unidades/);
     await view.openByIdentifier("SIM-UNKNOWN-LABEL", "record-target");
 
     const detail = elements["#unit-details"];
@@ -336,6 +347,103 @@ test("abre y enfoca el intento exacto aunque no exista una ficha de unidad", asy
     assert.equal(scrolledElement?.dataset.historyRecordId, "record-target");
     assert.match(elements["#units-status"].textContent, /Unidad no registrada/);
     assert.match(elements["#unit-detail-announcement"].textContent, /Se abrió el registro de historial sin ficha de unidad/);
+    assert.equal(detail.attributes.has("aria-busy"), false);
+  });
+});
+
+test("una consulta tardía de detalle no reemplaza la unidad seleccionada después", async () => {
+  const firstUnit: HandlingUnitDto = {
+    id: "unit-first",
+    label: "PAL-PRIMERO",
+    status: "stored",
+    currentLocationId: null,
+    lines: [{ sku: "SKU-FIRST", quantity: 1, lotCode: null }],
+  };
+  const secondUnit: HandlingUnitDto = {
+    id: "unit-second",
+    label: "PAL-SEGUNDO",
+    status: "received",
+    currentLocationId: null,
+    lines: [{ sku: "SKU-SECOND", quantity: 2, lotCode: null }],
+  };
+  const unitRequests = new Map<string, ReturnType<typeof deferred<HandlingUnitDto | null>>>();
+  const historyRequests = new Map<string, ReturnType<typeof deferred<MovementHistoryEntryDto[]>>>();
+
+  await withUnitsView({
+    listHandlingUnits: async () => [firstUnit, secondUnit],
+    listLocations: async () => [],
+    getHandlingUnit: async (identifier) => {
+      const request = deferred<HandlingUnitDto | null>();
+      unitRequests.set(identifier, request);
+      return request.promise;
+    },
+    getMovementHistory: async (identifier) => {
+      const request = deferred<MovementHistoryEntryDto[]>();
+      historyRequests.set(identifier, request);
+      return request.promise;
+    },
+  }, async (elements, view) => {
+    await view.refresh();
+    const rows = elements["#units-table-body"].children;
+    rows[0].children[4].children[0].dispatch("click");
+    await waitFor(() => unitRequests.has(firstUnit.id) && historyRequests.has(firstUnit.id), "la primera consulta de detalle");
+    rows[1].children[4].children[0].dispatch("click");
+    await waitFor(() => unitRequests.has(secondUnit.id) && historyRequests.has(secondUnit.id), "la segunda consulta de detalle");
+
+    const detail = elements["#unit-details"];
+    assert.equal(detail.attributes.get("aria-busy"), "true");
+    assert.match(detail.textContent, /PAL-SEGUNDO/);
+
+    unitRequests.get(firstUnit.id)!.resolve(firstUnit);
+    historyRequests.get(firstUnit.id)!.resolve([
+      historyEntry({ recordId: "record-first", eventId: "event-first", handlingUnitId: firstUnit.id }),
+    ]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(detail.attributes.get("aria-busy"), "true", "la solicitud antigua no debe finalizar la carga vigente");
+    assert.match(detail.textContent, /PAL-SEGUNDO/);
+    assert.doesNotMatch(detail.textContent, /PAL-PRIMERO/);
+
+    unitRequests.get(secondUnit.id)!.resolve(secondUnit);
+    historyRequests.get(secondUnit.id)!.resolve([
+      historyEntry({ recordId: "record-second", eventId: "event-second", handlingUnitId: secondUnit.id }),
+    ]);
+    await waitFor(
+      () => elements["#unit-detail-announcement"].textContent.includes("Detalle e historial del pallet PAL-SEGUNDO cargados"),
+      "el detalle de la selección vigente",
+    );
+    assert.match(detail.textContent, /PAL-SEGUNDO/);
+    assert.match(detail.textContent, /SKU-SECOND/);
+    assert.match(detail.textContent, /event-second/);
+    assert.doesNotMatch(detail.textContent, /PAL-PRIMERO|SKU-FIRST|event-first/);
+    assert.equal(detail.attributes.has("aria-busy"), false);
+  });
+});
+
+test("conserva el detalle de unidad y presenta el error si falla su historial", async () => {
+  const unit: HandlingUnitDto = {
+    id: "unit-history-error",
+    label: "PAL-HISTORIAL-ERROR",
+    status: "stored",
+    currentLocationId: null,
+    lines: [{ sku: "SKU-HISTORY", quantity: 3, lotCode: "LOT-HISTORY" }],
+  };
+
+  await withUnitsView({
+    listHandlingUnits: async () => [unit],
+    listLocations: async () => [],
+    getHandlingUnit: async () => unit,
+    getMovementHistory: async () => {
+      throw new AriadnaIpcError({ code: "storage", message: "No se pudo consultar el historial." });
+    },
+  }, async (elements, view) => {
+    await view.refresh();
+    await view.openByIdentifier(unit.id);
+
+    const detail = elements["#unit-details"];
+    assert.match(detail.textContent, /PAL-HISTORIAL-ERROR/);
+    assert.match(detail.textContent, /SKU-HISTORY/);
+    assert.match(detail.textContent, /No se pudo consultar el historial/);
+    assert.match(elements["#unit-detail-announcement"].textContent, /Detalle del pallet PAL-HISTORIAL-ERROR cargado, pero falló el historial/);
     assert.equal(detail.attributes.has("aria-busy"), false);
   });
 });
