@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "test:map": "node --experimental-strip-types --test tests/warehouse-map.test.ts",
+    "test:map-view": "node --experimental-strip-types --test tests/warehouse-map-view.test.ts",
     "test:operations": "node --experimental-strip-types --test tests/operations-refresh.test.ts",
     "test:operations-view": "node --experimental-strip-types --test tests/operations-view.test.ts",
     "test:units-view": "node --experimental-strip-types --test tests/units-view-request-guard.test.ts",

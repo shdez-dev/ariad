@@ -48,6 +48,9 @@ jobs:
       - name: Test map model
         run: npm run test:map
 
+      - name: Test warehouse map view focus restoration
+        run: npm run test:map-view
+
       - name: Test operation refresh concurrency
         run: npm run test:operations
 

@@ -1,6 +1,6 @@
-import { inventoryIpc, type HandlingUnitDto, type LocationDto } from "../lib/ipc";
-import { locationKindLabels } from "../lib/catalog-model";
-import { createWarehouseMapRefreshGuard } from "../lib/warehouse-map-refresh-guard";
+import { inventoryIpc, type HandlingUnitDto, type LocationDto } from "../lib/ipc.ts";
+import { locationKindLabels } from "../lib/catalog-model.ts";
+import { createWarehouseMapRefreshGuard } from "../lib/warehouse-map-refresh-guard.ts";
 import {
   buildWarehouseMap,
   formatPositionAccessibleLabel,
@@ -8,7 +8,7 @@ import {
   type LocationTreeNode,
   type PositionState,
   type WarehouseMapModel,
-} from "../lib/warehouse-map";
+} from "../lib/warehouse-map.ts";
 
 document.documentElement.dataset.app = "ariadna";
 
