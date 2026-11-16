@@ -54,7 +54,9 @@ class FakeElement {
     }
   }
 
-  focus(): void {}
+  focus(): void {
+    focusedElement = this;
+  }
 
   reset(): void {}
 
@@ -62,6 +64,8 @@ class FakeElement {
     return true;
   }
 }
+
+let focusedElement: FakeElement | null = null;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -95,6 +99,7 @@ async function withMountedView(
   run: (elements: Map<string, FakeElement>, view: { refresh: () => Promise<unknown> }) => Promise<void>,
 ): Promise<void> {
   const elements = new Map(selectorsFor(kind).map((selector) => [selector, new FakeElement()]));
+  focusedElement = null;
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousIpc = new Map(
@@ -187,6 +192,7 @@ for (const kind of ["products", "locations"] as const) {
       requests.get(keyFor(records[1]))!.resolve(records[1]);
       await flushPromises();
       assert.equal(elements.get(formTitleSelector)!.textContent, "Editar " + titleFor(records[1]));
+      assert.equal(focusedElement, elements.get(isProducts ? "#product-description" : "#location-code"));
 
       requests.get(keyFor(records[0]))!.resolve(records[0]);
       await flushPromises();
@@ -207,6 +213,9 @@ for (const kind of ["products", "locations"] as const) {
 
         if (action === "new") elements.get(newButtonSelector)!.dispatch("click");
         else elements.get(cancelButtonSelector)!.dispatch("click");
+        assert.equal(focusedElement, elements.get(action === "new"
+          ? isProducts ? "#product-sku" : "#location-code"
+          : newButtonSelector));
 
         pending.reject(new Error("respuesta de edición obsoleta"));
         await flushPromises();
@@ -219,6 +228,9 @@ for (const kind of ["products", "locations"] as const) {
             ? "Formulario de producto cerrado."
             : "Formulario de ubicación cerrado.");
         }
+        assert.equal(focusedElement, elements.get(action === "new"
+          ? isProducts ? "#product-sku" : "#location-code"
+          : newButtonSelector));
         assert.doesNotMatch(elements.get(statusSelector)!.textContent, /respuesta de edición obsoleta/);
       });
     }

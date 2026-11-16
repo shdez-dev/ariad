@@ -349,4 +349,10 @@ Verificación local: npm run test:alerts-view (8 pruebas), npm test (15 suites, 
 
 La suite de alerts-view ahora ejercita el método público focusAlert que se invoca al abrir una alerta desde otra vista. Cuando existe, el caso seleccionado recibe foco y se desplaza con block=nearest; cuando ya no está en la lista, se anuncia el estado de error y se enfoca el título para orientar a la persona usuaria.
 
-Verificación local: npm run test:alerts-view (10 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La prueba usa DOM simulado y verifica el contrato de foco y scroll; no sustituye WebView real, teclado ni lector de pantalla. CI Windows de este follow-up pendiente.
+Verificación local: npm run test:alerts-view (10 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La prueba usa DOM simulado y verifica el contrato de foco y scroll; no sustituye WebView real, teclado ni lector de pantalla. CI Windows [43953749099](https://github.com/shdez-dev/ariad/actions/runs/43953749099) pasó para bc6f34c y publicó NSIS 2.26 MB (SHA-256 4a8145b7ade369e7729ddb8843e2f204d09da47a12c0cd24b30d82f2f0ef98e9).
+
+## Comprobar el foco del teclado en formularios de producto y ubicación, ARD-12
+
+La suite de vistas de catálogo ahora registra el elemento enfocado. En los flujos de productos y ubicaciones verifica que Nuevo enfoque el primer campo, Cancelar devuelva el foco a Nuevo, la apertura de edición enfoque un campo editable del registro seleccionado y el rechazo de una respuesta obsoleta no desplace el foco posterior.
+
+Verificación local: npm run test:catalog-views (32 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La cobertura comprueba llamadas de foco en DOM simulado, no navegación real de teclado ni lector de pantalla en WebView. CI Windows del follow-up pendiente.
