@@ -12,6 +12,8 @@ import { Select } from "selenium-webdriver/lib/select.js";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const application = process.env.ARIADNA_APP_BINARY
   ?? resolve(repositoryRoot, "src-tauri", "target", "release", "ariadna.exe");
+const tauriDriverBinary = process.env.ARIADNA_TAURI_DRIVER_BINARY ?? "tauri-driver";
+const nativeDriverBinary = process.env.ARIADNA_EDGE_DRIVER_BINARY;
 const webdriverUrl = "http://127.0.0.1:4444/";
 const artifactsDirectory = process.env.ARIADNA_E2E_ARTIFACTS;
 
@@ -45,8 +47,15 @@ async function saveScreenshot(driver, name) {
 }
 
 test("Tauri integra el recorrido normal, el historial y una alerta revisable", async (t) => {
-  const driverProcess = spawn("tauri-driver", [], { stdio: ["ignore", "inherit", "inherit"] });
+  const driverArguments = nativeDriverBinary ? ["--native-driver", nativeDriverBinary] : [];
+  console.info(`[E2E] Aplicación: ${application}`);
+  console.info(`[E2E] tauri-driver: ${tauriDriverBinary}`);
+  console.info(`[E2E] Driver nativo: ${nativeDriverBinary ?? "resuelto desde PATH"}`);
+  const driverProcess = spawn(tauriDriverBinary, driverArguments, {
+    stdio: ["ignore", "inherit", "inherit"],
+  });
   let driver;
+  let currentStage = "iniciar tauri-driver";
   t.after(async () => {
     try {
       await driver?.quit();
@@ -59,7 +68,9 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
   });
 
   try {
+    console.info("[E2E] Esperando el servidor WebDriver");
     await waitForDriver(driverProcess);
+    currentStage = "crear la sesión WebDriver y abrir Ariadna";
     const capabilities = new Capabilities();
     capabilities.set("tauri:options", { application });
     capabilities.setBrowserName("wry");
@@ -69,6 +80,7 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
       .build();
     await driver.manage().setTimeouts({ implicit: 0, pageLoad: 30_000, script: 30_000 });
 
+    currentStage = "esperar la carga inicial del mapa";
     await driver.wait(async () => {
       const mapPanel = await driver.findElement(By.css("#map-panel"));
       return (await mapPanel.getAttribute("aria-busy")) !== "true";
@@ -86,6 +98,8 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     const runId = process.env.GITHUB_RUN_ID ?? `local-${Date.now()}`;
     const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
     const normalSeed = `ARIADNA-E2E-${runId}-${runAttempt}`;
+    currentStage = "ejecutar recepción, asignación, traslado y despacho";
+    console.info("[E2E] Ejecutando el escenario normal");
     await driver.findElement(By.css("#simulator-seed")).clear();
     await driver.findElement(By.css("#simulator-seed")).sendKeys(normalSeed);
     await new Select(await driver.findElement(By.css("#simulator-scenario"))).selectByValue("normal");
@@ -100,6 +114,7 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     for (const step of steps) assert.match(await step.getText(), /Dato sintético/);
     await saveScreenshot(driver, "ariadna-tauri-e2e-normal.png");
 
+    currentStage = "comprobar estado final e historial de la unidad";
     await steps[0].findElement(By.css("button")).click();
     await driver.wait(async () => await driver.findElement(By.css("#view-units")).isDisplayed(), 5_000);
     await driver.wait(async () => (
@@ -114,6 +129,8 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     await simulatorNav.click();
     await driver.wait(async () => await driver.findElement(By.css("#view-simulator")).isDisplayed(), 5_000);
     const anomalySeed = `${normalSeed}-ANOMALY`;
+    currentStage = "ejecutar la anomalía de etiqueta desconocida";
+    console.info("[E2E] Ejecutando el escenario de etiqueta desconocida");
     await driver.findElement(By.css("#simulator-seed")).clear();
     await driver.findElement(By.css("#simulator-seed")).sendKeys(anomalySeed);
     await new Select(await driver.findElement(By.css("#simulator-scenario"))).selectByValue("unknown_label");
@@ -126,6 +143,7 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     assert.equal(anomalyActions.length, 2);
     assert.equal(await anomalyActions[0].getText(), "Mostrar registro exacto");
     await anomalyActions[0].click();
+    currentStage = "comprobar el intento exacto y su alerta";
     const attemptDetail = await driver.findElement(By.css("#simulator-record-detail")).getText();
     assert.match(attemptDetail, /REGISTRO SINTÉTICO/);
     assert.match(attemptDetail, /attempt:/);
@@ -153,6 +171,7 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     assert.match(exactRecord, /Identificador:\s+attempt:/);
 
     await driver.findElement(By.css('#alerts-list [data-alert-action="review"]')).click();
+    currentStage = "persistir la revisión de la alerta";
     await driver.wait(async () => (
       await driver.findElement(By.css("#alerts-list .alert-status-reviewed")).getText()
     ) === "Revisada", 15_000, "La revisión debe persistirse en SQLite");
@@ -160,6 +179,16 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
       "una alerta revisada no debe ofrecer de nuevo la misma acción");
     await saveScreenshot(driver, "ariadna-tauri-e2e-alert.png");
   } catch (error) {
+    const diagnostic = JSON.stringify({
+      stage: currentStage,
+      error: String(error?.message ?? error),
+      stack: String(error?.stack ?? error).split("\n").slice(0, 8),
+    });
+    console.error(`[E2E] Falló al ${currentStage}: ${String(error?.message ?? error)}`);
+    if (artifactsDirectory) {
+      await mkdir(artifactsDirectory, { recursive: true });
+      await writeFile(resolve(artifactsDirectory, "ariadna-tauri-e2e-diagnostic.json"), diagnostic);
+    }
     if (driver) await saveScreenshot(driver, "ariadna-tauri-e2e-failure.png").catch(() => undefined);
     throw error;
   }

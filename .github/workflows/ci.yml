@@ -113,7 +113,14 @@ jobs:
         run: |
           cargo install --git https://github.com/chippers/msedgedriver-tool
           & "$env:USERPROFILE\.cargo\bin\msedgedriver-tool.exe"
-          $PWD.Path >> $env:GITHUB_PATH
+          $edgeDriver = Join-Path $PWD.Path "msedgedriver.exe"
+          $tauriDriver = Join-Path $env:USERPROFILE ".cargo\bin\tauri-driver.exe"
+          if (-not (Test-Path -LiteralPath $edgeDriver -PathType Leaf)) { throw "No se descargó msedgedriver.exe en $PWD." }
+          if (-not (Test-Path -LiteralPath $tauriDriver -PathType Leaf)) { throw "No se encontró tauri-driver.exe en $tauriDriver." }
+          Write-Host "Edge WebDriver: $(& $edgeDriver --version)"
+          Write-Host "tauri-driver: $tauriDriver"
+          "ARIADNA_EDGE_DRIVER_BINARY=$edgeDriver" >> $env:GITHUB_ENV
+          "ARIADNA_TAURI_DRIVER_BINARY=$tauriDriver" >> $env:GITHUB_ENV
 
       - name: Install Tauri end-to-end test dependencies
         run: npm ci --prefix e2e-tests
@@ -127,6 +134,17 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
           npm test --prefix e2e-tests
+          $testExitCode = $LASTEXITCODE
+          if ($testExitCode -ne 0) {
+            $diagnosticPath = Join-Path $env:ARIADNA_E2E_ARTIFACTS "ariadna-tauri-e2e-diagnostic.json"
+            if (Test-Path -LiteralPath $diagnosticPath -PathType Leaf) {
+              $diagnostic = [System.IO.File]::ReadAllText($diagnosticPath).Trim()
+              Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "### Fallo de aceptación E2E`n`n$diagnostic"
+              $commandDiagnostic = $diagnostic.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+              Write-Output "::error title=Ariadna E2E falló::$commandDiagnostic"
+            }
+            exit $testExitCode
+          }
 
       - name: Verify NSIS install, launch, and uninstall
         shell: pwsh
@@ -147,5 +165,6 @@ jobs:
             src-tauri/target/release/bundle/nsis/*-setup.exe
             ${{ runner.temp }}/ariadna-ard-22-verification.md
             ${{ runner.temp }}/ariadna-tauri-e2e-*.png
+            ${{ runner.temp }}/ariadna-tauri-e2e-diagnostic.json
           if-no-files-found: warn
           retention-days: 14
