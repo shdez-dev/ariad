@@ -294,6 +294,81 @@ test("el refresco restaura el foco y la selección consulta el pallet asociado",
   }
 });
 
+test("un movimiento confirmado refresca la ocupación y el detalle de las posiciones", async () => {
+  const environment = installFakeMapEnvironment();
+  const { elements, fakeDocument, fakeWindow } = environment;
+  const originalListLocations = inventoryIpc.listLocations;
+  const originalListUnits = inventoryIpc.listHandlingUnits;
+  const originalGetHandlingUnit = inventoryIpc.getHandlingUnit;
+  const unit: HandlingUnitDto = {
+    id: "unit-moved",
+    label: "PALLET-MOVED",
+    status: "stored",
+    currentLocationId: "position-1",
+    lines: [{ sku: "SKU-MOVED", quantity: 4, lotCode: "LOT-MOVED" }],
+  };
+  let units: HandlingUnitDto[] = [unit];
+  const locations = [
+    location("zone-1", "zone", null),
+    location("aisle-1", "aisle", "zone-1"),
+    location("rack-1", "rack", "aisle-1"),
+    location("position-1", "position", "rack-1"),
+    location("position-2", "position", "rack-1"),
+  ];
+  inventoryIpc.listLocations = async () => locations;
+  inventoryIpc.listHandlingUnits = async () => units;
+  inventoryIpc.getHandlingUnit = async (id) => units.find((candidate) => candidate.id === id) ?? null;
+
+  try {
+    await import("../src/views/warehouse-map-view.ts?ard11-movement-refresh-test");
+    const map = elements["#warehouse-map"];
+    await waitFor(
+      () => map.querySelectorAll<FakeElement>("[data-position-id]").some(
+        (position) => position.dataset.positionId === "position-1" && position.textContent.includes("Ocupada"),
+      ),
+      "la posición ocupada antes del traslado",
+    );
+    const origin = map.querySelectorAll<FakeElement>("[data-position-id]")
+      .find((position) => position.dataset.positionId === "position-1");
+    assert.ok(origin);
+    origin.dispatch("click");
+    await waitFor(() => elements["#position-details"].textContent.includes("PALLET-MOVED"), "el detalle del pallet en el origen");
+    origin.focus();
+
+    units = [{ ...unit, currentLocationId: "position-2" }];
+    fakeWindow.dispatchEvent({ type: "ariadna:inventory-changed" });
+
+    await waitFor(() => {
+      const positions = map.querySelectorAll<FakeElement>("[data-position-id]");
+      const refreshedOrigin = positions.find((position) => position.dataset.positionId === "position-1");
+      const destination = positions.find((position) => position.dataset.positionId === "position-2");
+      return refreshedOrigin !== origin
+        && refreshedOrigin?.textContent.includes("Libre") === true
+        && destination?.textContent.includes("Ocupada") === true
+        && elements["#position-details"].textContent.includes("No hay un pallet almacenado");
+    }, "la ocupación y el detalle actualizados después del movimiento");
+
+    const refreshedOrigin = map.querySelectorAll<FakeElement>("[data-position-id]")
+      .find((position) => position.dataset.positionId === "position-1");
+    const destination = map.querySelectorAll<FakeElement>("[data-position-id]")
+      .find((position) => position.dataset.positionId === "position-2");
+    assert.ok(refreshedOrigin);
+    assert.ok(destination);
+    assert.equal(refreshedOrigin.attributes.get("aria-pressed"), "true");
+    assert.equal(destination.attributes.get("aria-pressed"), "false");
+    assert.equal(fakeDocument.activeElement, refreshedOrigin, "el foco debe conservar la misma posición tras re-renderizar");
+    assert.equal(elements["#position-details"].textContent.includes("PALLET-MOVED"), false);
+    assert.match(elements["#selection-announcement"].textContent, /POSITION-1 seleccionada, libre/);
+    assert.equal(elements["#position-details"].attributes.has("aria-busy"), false);
+    assert.match(elements["#warehouse-summary"].textContent, /Ocupadas1/);
+  } finally {
+    inventoryIpc.listLocations = originalListLocations;
+    inventoryIpc.listHandlingUnits = originalListUnits;
+    inventoryIpc.getHandlingUnit = originalGetHandlingUnit;
+    environment.restore();
+  }
+});
+
 test("el mapa vacío indica dónde configurar las ubicaciones", async () => {
   const environment = installFakeMapEnvironment();
   const originalListLocations = inventoryIpc.listLocations;

@@ -366,3 +366,9 @@ Otra prueba ocupa el destino mientras la asignación está pendiente. La vista i
 Verificación local: `npm run test:operations-view` (7 pruebas), `npm test` (15 suites, 98 pruebas), `npm run build` y `git diff --check` pasan. La vista y el ciclo de inventario se prueban con DOM/IPC simulados; no reemplaza la aceptación visual, de teclado y lector de pantalla en Tauri. ARD-13 permanece abierta hasta esa revisión integrada.
 
 El CI Windows [43956987725](https://github.com/shdez-dev/ariad/actions/runs/43956987725) terminó success para `922ddc0`. Pasaron build, las 15 suites frontend (97 pruebas en ese commit), formato y Clippy de Rust, pruebas Rust, benchmark, empaquetado y el ciclo de instalación, inicio y desinstalación NSIS. Publicó `ariadna-windows-nsis-922ddc0fa6885849f6347002fc2a0295c37f98b8` (2.369.616 bytes; SHA-256 `4ffa9731eaabcd6cc3319e33f33ec7e13d844a1d5c8f7406f954b32359087e3b`).
+
+## Refrescar la ocupación y el detalle del mapa tras un movimiento, ARD-11
+
+`tests/warehouse-map-view.test.ts` comprueba el cambio en el evento `ariadna:inventory-changed`: un pallet pasa de la posición P-01 a P-02; el mapa libera P-01, ocupa P-02, refresca el detalle de la selección vigente y actualiza el resumen. También valida que la selección y el foco permanezcan en P-01 tras reconstruir la jerarquía. El evento se prueba con datos sintéticos e IPC sustituido; `tests/ipc-error.test.ts` cubre por separado que el aviso solo se emite después de confirmar una escritura.
+
+Verificación local: `npm run test:map-view` (4 pruebas), `npm test` (15 suites, 99 pruebas), `npm run build` y `git diff --check` pasan. La prueba no sustituye la inspección visual y accesible de WebView/Tauri. ARD-11 y ARD-25 siguen abiertas hasta completar la aceptación integrada.
