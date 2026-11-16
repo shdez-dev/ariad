@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { AriadnaIpcError, inventoryIpc } from "../src/lib/ipc.ts";
+import {
+  AriadnaIpcError,
+  inventoryIpc,
+  type HandlingUnitDto,
+  type LocationDto,
+  type MovementWriteDto,
+} from "../src/lib/ipc.ts";
 import { mountOperationsView } from "../src/views/operations-view.ts";
 
 type Listener = (event: { preventDefault(): void }) => void;
@@ -135,6 +141,7 @@ function operationSelectors(): string[] {
 async function withOperationsView(
   overrides: Partial<typeof inventoryIpc>,
   run: (elements: Map<string, FakeElement>) => Promise<void>,
+  confirm: () => boolean = () => true,
 ): Promise<void> {
   const elements = new Map(operationSelectors().map((selector) => [selector, new FakeElement()]));
   const tabs = ["receive", "store", "move", "dispatch"].map((mode) => {
@@ -142,6 +149,7 @@ async function withOperationsView(
     tab.dataset.operationTab = mode;
     return tab;
   });
+  for (const tab of tabs) elements.set(`tab:${tab.dataset.operationTab}`, tab);
   const panels = ["receive", "store", "move", "dispatch"].map((mode) => {
     const panel = new FakeElement("section");
     panel.dataset.operationPanel = mode;
@@ -169,7 +177,7 @@ async function withOperationsView(
   });
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: { confirm: () => true },
+    value: { confirm },
   });
   Object.assign(inventoryIpc, overrides);
 
@@ -355,5 +363,95 @@ test("el reintento de traslado conserva evento, origen y destino", async () => {
     assert.equal(writes[0].originLocationId, "position-a");
     assert.equal(writes[0].destinationLocationId, "position-b");
     assert.match(elements.get("#operation-history-details")!.textContent, /Duplicado, sin repetir efectos/);
+  });
+});
+
+test("el despacho cancelado no escribe y el confirmado espera la respuesta de Rust", async () => {
+  const storedUnit: HandlingUnitDto = {
+    id: "unit-stored-1",
+    label: "PAL-DISPATCH-1",
+    status: "stored",
+    currentLocationId: "position-1",
+    lines: [{ sku: "SKU-1", quantity: 3, lotCode: "LOT-1" }],
+  };
+  const dispatchedUnit: HandlingUnitDto = {
+    ...storedUnit,
+    status: "dispatched",
+    currentLocationId: null,
+  };
+  const locations: LocationDto[] = [
+    { id: "zone-1", code: "Z-1", name: "Zona 1", kind: "zone", parentId: null, active: true },
+    { id: "aisle-1", code: "A-1", name: "Pasillo 1", kind: "aisle", parentId: "zone-1", active: true },
+    { id: "rack-1", code: "R-1", name: "Rack 1", kind: "rack", parentId: "aisle-1", active: true },
+    { id: "position-1", code: "P-01", name: "Posición 1", kind: "position", parentId: "rack-1", active: true },
+  ];
+  let shouldConfirm = false;
+  let confirmationCount = 0;
+  let dispatchRequested = false;
+  let dispatchInput: Parameters<typeof inventoryIpc.dispatchUnit>[0] | null = null;
+  let resolveDispatch: ((write: MovementWriteDto) => void) | undefined;
+
+  await withOperationsView({
+    listProducts: async () => products,
+    listHandlingUnits: async () => dispatchRequested ? [dispatchedUnit] : [storedUnit],
+    listLocations: async () => locations,
+    dispatchUnit: async (input) => {
+      dispatchInput = structuredClone(input);
+      dispatchRequested = true;
+      return await new Promise<MovementWriteDto>((resolve) => {
+        resolveDispatch = resolve;
+      });
+    },
+    getMovementHistory: async (unitId) => {
+      assert.equal(unitId, storedUnit.id);
+      assert.ok(dispatchInput);
+      return [{
+        recordId: "record-dispatch-1",
+        eventId: dispatchInput.eventId,
+        handlingUnitId: unitId,
+        kind: "dispatched",
+        originLocationId: "position-1",
+        destinationLocationId: null,
+        occurredAtMs: dispatchInput.occurredAtMs,
+        recordedAtMs: dispatchInput.occurredAtMs,
+        source: "manual",
+        result: "applied",
+        rejectionReason: null,
+        correctsEventId: null,
+        correctionReason: null,
+      }];
+    },
+  }, async (elements) => {
+    elements.get("tab:dispatch")!.dispatch("click");
+    elements.get("#dispatch-unit")!.value = storedUnit.id;
+    const dispatchForm = elements.get("#dispatch-operation-form")!;
+    dispatchForm.dispatch("submit");
+
+    assert.equal(confirmationCount, 1);
+    assert.equal(dispatchRequested, false, "cancelar la confirmación no debe llamar a Rust");
+    assert.doesNotMatch(elements.get("#operation-result-status")!.textContent, /Despacho confirmada/);
+
+    shouldConfirm = true;
+    dispatchForm.dispatch("submit");
+    await waitFor(() => dispatchInput !== null, "el envío del despacho a Rust");
+    assert.equal(confirmationCount, 2);
+    assert.equal(elements.get("#operation-result-status")!.dataset.kind, "neutral");
+    assert.equal(elements.get("#operation-result-status")!.textContent, "Esperando confirmación de Rust…");
+    assert.equal(dispatchInput!.handlingUnitId, storedUnit.id);
+    assert.equal(dispatchInput!.originLocationId, storedUnit.currentLocationId);
+    assert.ok(dispatchInput!.eventId);
+
+    resolveDispatch?.({ eventId: dispatchInput!.eventId, outcome: "applied" });
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "success",
+      "la confirmación del despacho",
+    );
+    assert.match(elements.get("#operation-result-status")!.textContent, /Despacho confirmada por Rust/);
+    assert.match(elements.get("#operation-history-details")!.textContent, /Despacho/);
+    assert.match(elements.get("#operation-history-details")!.textContent, /P-01/);
+    assert.match(elements.get("#operation-history-details")!.textContent, /Evento/);
+  }, () => {
+    confirmationCount += 1;
+    return shouldConfirm;
   });
 });
