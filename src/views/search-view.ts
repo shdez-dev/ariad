@@ -196,6 +196,9 @@ export function mountSearchView(): { refresh: () => Promise<void> } {
 
   async function openResult(result: InventorySearchResultDto): Promise<void> {
     if (result.kind === "handling_unit") {
+      requestNumber += 1;
+      setBusy(detail, false);
+      showEmptyDetail("Abriendo unidad", "Consultando la cronología de movimientos.");
       setStatus(`Abriendo el historial de ${result.title}…`);
       window.dispatchEvent(new CustomEvent("ariadna:open-unit", {
         detail: { handlingUnitId: result.id },

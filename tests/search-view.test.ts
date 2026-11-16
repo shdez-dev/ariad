@@ -326,3 +326,42 @@ test("no libera aria-busy por un detalle obsoleto", async () => {
     assert.match(detail.textContent, /Detalle vigente/);
   });
 });
+
+test("abrir una unidad cancela el detalle pendiente y anuncia la navegación al historial", async () => {
+  await withSearchDom(async (elements) => {
+    const pendingProduct = deferred<Awaited<ReturnType<typeof inventoryIpc.getProduct>>>();
+    inventoryIpc.searchInventory = async () => [
+      { kind: "product", id: "SKU-1", title: "SKU-1", subtitle: "Producto", status: "active" },
+      { kind: "handling_unit", id: "unit-1", title: "PALLET-1", subtitle: "Contiene SKU-1", status: "stored" },
+    ];
+    inventoryIpc.getProduct = async () => pendingProduct.promise;
+    elements["#inventory-search-input"].value = "SKU-1";
+    const view = mountSearchView();
+    await view.refresh();
+    const buttons = findAllByClass(elements["#inventory-search-results"], "search-result-button");
+    assert.equal(buttons.length, 2);
+
+    const fakeWindow = globalThis.window as unknown as { dispatchEvent(event: Event): boolean };
+    let openedUnitEvent: CustomEvent<{ handlingUnitId: string }> | null = null;
+    fakeWindow.dispatchEvent = (event) => {
+      openedUnitEvent = event as CustomEvent<{ handlingUnitId: string }>;
+      return true;
+    };
+
+    buttons[0].dispatch("click");
+    const detail = elements["#inventory-search-detail"];
+    assert.equal(detail.attributes.get("aria-busy"), "true");
+    buttons[1].dispatch("click");
+
+    assert.equal(openedUnitEvent?.type, "ariadna:open-unit");
+    assert.deepEqual(openedUnitEvent?.detail, { handlingUnitId: "unit-1" });
+    assert.equal(detail.attributes.has("aria-busy"), false);
+    assert.match(detail.textContent, /Abriendo unidad/);
+    assert.match(elements["#inventory-search-status"].textContent, /Abriendo el historial de PALLET-1/);
+
+    pendingProduct.resolve({ sku: "SKU-1", description: "Respuesta antigua", unitOfMeasure: "unidad", active: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.doesNotMatch(detail.textContent, /Respuesta antigua/);
+    assert.match(elements["#inventory-search-status"].textContent, /Abriendo el historial de PALLET-1/);
+  });
+});

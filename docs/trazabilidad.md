@@ -376,3 +376,11 @@ El follow-up `40ba0fe` cubre la carrera en que una posición se ocupa mientras e
 Verificación local: la prueba focal falló antes del arreglo y pasa después; `npm run test:map-view` (4 pruebas), `npm test` (15 suites, 99 pruebas), `npm run build` y `git diff --check` pasan. La prueba no sustituye la inspección visual y accesible de WebView/Tauri. ARD-11 y ARD-25 siguen abiertas hasta completar la aceptación integrada.
 
 El commit base `b3fd56f` pasó CI Windows [43968000351](https://github.com/shdez-dev/ariad/actions/runs/43968000351), incluida la instalación, inicio y desinstalación NSIS. Publicó `ariadna-windows-nsis-b3fd56f5d3b51d91ab0ad927dd0920b8573e7ee7` (2.369.215 bytes; SHA-256 `57f420fd7b8beefd2c148a3a95743619afb7962f65c7b50b6777215b463d2982`).
+
+El arreglo de foco del commit `8e162b7` pasó CI Windows [43969046565](https://github.com/shdez-dev/ariad/actions/runs/43969046565), incluido el ciclo de instalación, inicio y desinstalación NSIS. Publicó `ariadna-windows-nsis-8e162b79f97e8cd6db0e6745c409b33a2d070e49` (2.369.467 bytes; SHA-256 `375f1959f9e3a17c5ae1ca656fd90202cdebba69a2378171db33e936fc6b9ad1`).
+
+## Cancelar el detalle anterior al abrir una unidad desde búsqueda, ARD-14
+
+Una prueba reproduce que, con un detalle de producto aún pendiente, abrir una unidad desde los resultados conservaba `aria-busy` y permitía que la respuesta antigua sobrescribiera el mensaje de navegación. `search-view.ts` ahora invalida esa consulta, limpia el estado ocupado, muestra que se abrirá la cronología y emite el evento con el ID exacto de la unidad. La respuesta antigua ya no modifica el detalle ni el estado.
+
+Verificación local: la prueba focal falla antes del arreglo y pasa después; `npm run test:search` (7 pruebas), `npm test` (15 suites, 100 pruebas), `npm run build` y `git diff --check` pasan. La prueba usa DOM e IPC simulados y no sustituye la aceptación integrada en Tauri.
