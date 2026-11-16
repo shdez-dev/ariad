@@ -6,6 +6,7 @@ import {
   inventoryIpc,
   type HandlingUnitDto,
   type LocationDto,
+  type MovementHistoryEntryDto,
   type MovementWriteDto,
 } from "../src/lib/ipc.ts";
 import { mountOperationsView } from "../src/views/operations-view.ts";
@@ -368,6 +369,135 @@ test("el reintento de traslado conserva evento, origen y destino", async () => {
     assert.equal(writes[0].originLocationId, "position-a");
     assert.equal(writes[0].destinationLocationId, "position-b");
     assert.match(elements.get("#operation-history-details")!.textContent, /Duplicado, sin repetir efectos/);
+  });
+});
+
+test("completa recepción, asignación y traslado con datos refrescados y el historial exacto", async () => {
+  let unitId = "";
+  const locations: LocationDto[] = [
+    { id: "position-1", code: "P-01", name: "Posición 1", kind: "position", parentId: null, active: true },
+    { id: "position-2", code: "P-02", name: "Posición 2", kind: "position", parentId: null, active: true },
+    { id: "position-3", code: "P-03", name: "Posición 3", kind: "position", parentId: null, active: true },
+  ];
+  let unit: HandlingUnitDto | null = null;
+  const history: MovementHistoryEntryDto[] = [];
+  let receiptInput: Parameters<typeof inventoryIpc.receiveUnit>[0] | null = null;
+  let storeInput: Parameters<typeof inventoryIpc.storeUnit>[0] | null = null;
+  let moveInput: Parameters<typeof inventoryIpc.moveUnit>[0] | null = null;
+  let recordNumber = 0;
+
+  const addHistory = (
+    eventId: string,
+    kind: string,
+    originLocationId: string | null,
+    destinationLocationId: string | null,
+    occurredAtMs: number,
+  ) => {
+    recordNumber += 1;
+    history.unshift({
+      recordId: `record-${recordNumber}`,
+      eventId,
+      handlingUnitId: unitId,
+      kind,
+      originLocationId,
+      destinationLocationId,
+      occurredAtMs,
+      recordedAtMs: occurredAtMs,
+      source: "manual",
+      result: "accepted",
+      rejectionReason: null,
+      correctsEventId: null,
+      correctionReason: null,
+    });
+  };
+
+  await withOperationsView({
+    listProducts: async () => products,
+    listHandlingUnits: async () => unit ? [unit] : [],
+    listLocations: async () => locations,
+    receiveUnit: async (input) => {
+      receiptInput = structuredClone(input);
+      unitId = input.id;
+      unit = {
+        id: input.id,
+        label: input.label,
+        status: "received",
+        currentLocationId: null,
+        lines: input.lines.map((line) => ({ ...line })),
+      };
+      addHistory(input.eventId, "received", null, null, input.occurredAtMs);
+      return { eventId: input.eventId, outcome: "applied" };
+    },
+    storeUnit: async (input) => {
+      storeInput = structuredClone(input);
+      assert.ok(unit);
+      assert.equal(unit.status, "received");
+      unit = { ...unit, status: "stored", currentLocationId: input.destinationLocationId };
+      addHistory(input.eventId, "stored", null, input.destinationLocationId, input.occurredAtMs);
+      return { eventId: input.eventId, outcome: "applied" };
+    },
+    moveUnit: async (input) => {
+      moveInput = structuredClone(input);
+      assert.ok(unit);
+      assert.equal(unit.status, "stored");
+      assert.equal(unit.currentLocationId, input.originLocationId);
+      unit = { ...unit, currentLocationId: input.destinationLocationId };
+      addHistory(input.eventId, "moved", input.originLocationId, input.destinationLocationId, input.occurredAtMs);
+      return { eventId: input.eventId, outcome: "applied" };
+    },
+    getMovementHistory: async (requestedUnitId) => {
+      assert.equal(requestedUnitId, unitId);
+      return history;
+    },
+  }, async (elements) => {
+    prepareReceipt(elements);
+    elements.get("#receive-operation-form")!.dispatch("submit");
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "success"
+        && elements.get("#store-unit")!.children.some((item) => item.value === unitId),
+      "la recepción y la unidad pendiente de ubicación",
+    );
+
+    assert.ok(receiptInput);
+    assert.equal(receiptInput!.label, "Recepción de prueba");
+    assert.deepEqual(receiptInput!.lines, [{ sku: "SKU-1", quantity: 3, lotCode: "LOTE-7" }]);
+    assert.equal(elements.get("#store-destination")!.children.some((item) => item.value === "position-1"), true);
+
+    elements.get("tab:store")!.dispatch("click");
+    elements.get("#store-unit")!.value = unitId;
+    elements.get("#store-destination")!.value = "position-1";
+    elements.get("#store-operation-form")!.dispatch("submit");
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "success"
+        && elements.get("#move-unit")!.children.some((item) => item.value === unitId),
+      "la asignación de posición y la unidad almacenada",
+    );
+
+    assert.ok(storeInput);
+    assert.equal(storeInput!.handlingUnitId, unitId);
+    assert.equal(storeInput!.destinationLocationId, "position-1");
+    assert.equal(elements.get("#move-submit")!.disabled, false);
+
+    elements.get("tab:move")!.dispatch("click");
+    elements.get("#move-unit")!.value = unitId;
+    elements.get("#move-unit")!.dispatch("change");
+    elements.get("#move-destination")!.value = "position-2";
+    elements.get("#move-operation-form")!.dispatch("submit");
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "success"
+        && elements.get("#operation-history-details")!.textContent.includes("P-02"),
+      "el traslado y el historial actualizado",
+    );
+
+    assert.ok(moveInput);
+    assert.equal(moveInput!.handlingUnitId, unitId);
+    assert.equal(moveInput!.originLocationId, "position-1");
+    assert.equal(moveInput!.destinationLocationId, "position-2");
+    assert.equal(elements.get("#move-destination")!.children.some((item) => item.value === "position-1"), true);
+    assert.equal(elements.get("#move-destination")!.children.some((item) => item.value === "position-2"), false);
+    assert.match(elements.get("#operation-history-details")!.textContent, /Traslado/);
+    assert.match(elements.get("#operation-history-details")!.textContent, /P-01/);
+    assert.match(elements.get("#operation-history-details")!.textContent, /P-02/);
   });
 });
 

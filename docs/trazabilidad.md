@@ -355,4 +355,10 @@ Verificación local: npm run test:alerts-view (10 pruebas), npm test (15 suites,
 
 La suite de vistas de catálogo ahora registra el elemento enfocado. En los flujos de productos y ubicaciones verifica que Nuevo enfoque el primer campo, Cancelar devuelva el foco a Nuevo, la apertura de edición enfoque un campo editable del registro seleccionado y el rechazo de una respuesta obsoleta no desplace el foco posterior.
 
-Verificación local: npm run test:catalog-views (32 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La cobertura comprueba llamadas de foco en DOM simulado, no navegación real de teclado ni lector de pantalla en WebView. CI Windows del follow-up pendiente.
+Verificación local: npm run test:catalog-views (32 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La cobertura comprueba llamadas de foco en DOM simulado, no navegación real de teclado ni lector de pantalla en WebView. CI Windows [43954920546](https://github.com/shdez-dev/ariad/actions/runs/43954920546) terminó success para `2f44a40` y publicó el instalador NSIS de 2,26 MB con SHA-256 `0728a47fa386c2398392901ed035dbfea6b04ce8232e929c179104d7dd0ccd79`.
+
+## Completar el recorrido de recepción, ubicación y traslado desde la vista, ARD-13
+
+`tests/operations-view.test.ts` añade un recorrido integrado de la interfaz con IPC simulado. Registra una recepción con SKU, cantidad y lote opcional; comprueba que la unidad sin ubicación aparezca disponible para asignación; la almacena en una posición libre; y la traslada a otra posición. En cada paso valida el payload enviado a Rust, la actualización de selectores a partir de los datos recargados y el resumen del evento exacto. Al terminar comprueba origen y destino del historial, y que una posición vuelva a estar libre mientras la posición nueva no se ofrece como destino porque está ocupada.
+
+Verificación local: `npm run test:operations-view` (6 pruebas), `npm test` (15 suites, 97 pruebas), `npm run build` y `git diff --check` pasan. La vista y el ciclo de inventario se prueban con DOM/IPC simulados; no reemplaza la aceptación visual, de teclado y lector de pantalla en Tauri. ARD-13 permanece abierta hasta esa revisión integrada.
