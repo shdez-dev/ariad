@@ -1,6 +1,6 @@
-import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc";
-import { createAlertsViewState } from "../lib/alerts-view-state";
-import { isSimulatedSource, movementOccurredLabel } from "../lib/simulator-model";
+import { AriadnaIpcError, inventoryIpc, type AlertDto } from "../lib/ipc.ts";
+import { createAlertsViewState } from "../lib/alerts-view-state.ts";
+import { isSimulatedSource, movementOccurredLabel } from "../lib/simulator-model.ts";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);

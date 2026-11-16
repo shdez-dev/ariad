@@ -16,6 +16,7 @@
     "test:search": "node --experimental-strip-types --test tests/search-view.test.ts",
     "test:accessibility": "node --experimental-strip-types --test tests/ui-accessibility.test.ts",
     "test:alerts": "node --experimental-strip-types --test tests/alerts-refresh-guard.test.ts",
+    "test:alerts-view": "node --experimental-strip-types --test tests/alerts-view.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

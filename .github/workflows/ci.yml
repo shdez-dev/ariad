@@ -78,6 +78,9 @@ jobs:
       - name: Test alert refresh concurrency
         run: npm run test:alerts
 
+      - name: Test alert view references and failure states
+        run: npm run test:alerts-view
+
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
