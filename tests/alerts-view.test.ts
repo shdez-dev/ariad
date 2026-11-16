@@ -12,6 +12,7 @@ class FakeElement {
   className = "";
   type = "";
   tabIndex = 0;
+  scrollBlock: string | undefined;
   private ownText = "";
   private readonly listeners = new Map<string, Array<() => void>>();
 
@@ -59,6 +60,10 @@ class FakeElement {
 
   focus(): void {
     focusedElement = this;
+  }
+
+  scrollIntoView(options?: { block?: string }): void {
+    this.scrollBlock = options?.block;
   }
 
   querySelector<T extends Element>(selector: string): T | null {
@@ -383,5 +388,44 @@ test("si la alerta desaparece durante una revisión fallida, el foco vuelve a ac
     await waitFor(() => elements["#alerts-status"].dataset.kind === "error", "el error de revisión tras eliminar la alerta");
 
     assert.equal(focusedElement, elements["#alerts-refresh"]);
+  });
+});
+
+test("la navegación a una alerta enfoca y desplaza el registro solicitado", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    inventoryIpc.listAlerts = async () => [
+      makeAlert({ id: "alert-first" }),
+      makeAlert({ id: "alert-target", recordId: "attempt:77", movementEventId: null, movementAttemptId: 77 }),
+    ];
+    await view.refresh();
+
+    const cards = elements["#alerts-list"].querySelectorAll<FakeElement>("[data-alert-id]");
+    assert.equal(cards.length, 2);
+    const targetCard = cards.find((card) => card.dataset.alertId === "alert-target");
+    assert.ok(targetCard);
+    const targetButton = targetCard.querySelector<FakeElement>("[data-alert-action='open-event']");
+    assert.ok(targetButton);
+
+    view.focusAlert("alert-target");
+
+    assert.equal(focusedElement, targetButton);
+    assert.equal(targetCard.scrollBlock, "nearest");
+    assert.equal(elements["#alerts-status"].dataset.kind, "neutral");
+  });
+});
+
+test("si la alerta solicitada ya no existe, anuncia el cambio y enfoca el título", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    inventoryIpc.listAlerts = async () => [makeAlert({ id: "alert-current" })];
+    await view.refresh();
+
+    view.focusAlert("alert-removed");
+
+    assert.equal(elements["#alerts-status"].dataset.kind, "error");
+    assert.equal(
+      elements["#alerts-status"].textContent,
+      "La alerta solicitada ya no está en la lista. Actualiza las alertas.",
+    );
+    assert.equal(focusedElement, elements["#alerts-title"]);
   });
 });

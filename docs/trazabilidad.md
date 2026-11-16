@@ -344,3 +344,9 @@ Verificación local: npm run test:alerts-view (7 pruebas), npm test (15 suites, 
 Un caso adicional deja pendiente la revisión IPC, refresca la lista hasta que la alerta desaparece y luego rechaza la escritura. La vista no intenta enfocar una tarjeta inexistente y devuelve el foco al botón Actualizar alertas.
 
 Verificación local: npm run test:alerts-view (8 pruebas), npm test (15 suites, 94 pruebas), npm run build y git diff --check pasan. El fake DOM valida la selección del destino de foco; la aceptación con WebView, teclado y lector de pantalla sigue pendiente. CI Windows [43950838330](https://github.com/shdez-dev/ariad/actions/runs/43950838330) terminó success para 122c00f y publicó NSIS 2.26 MB (SHA-256 fe7c2076ba528a5ef9b10a260656b286e06b8eb1199c01213e9c2b519a1e8036).
+
+## Navegar a una alerta relacionada y recuperar el foco si ya no existe, ARD-14
+
+La suite de alerts-view ahora ejercita el método público focusAlert que se invoca al abrir una alerta desde otra vista. Cuando existe, el caso seleccionado recibe foco y se desplaza con block=nearest; cuando ya no está en la lista, se anuncia el estado de error y se enfoca el título para orientar a la persona usuaria.
+
+Verificación local: npm run test:alerts-view (10 pruebas), npm test (15 suites, 96 pruebas), npm run build y git diff --check pasan. La prueba usa DOM simulado y verifica el contrato de foco y scroll; no sustituye WebView real, teclado ni lector de pantalla. CI Windows de este follow-up pendiente.
