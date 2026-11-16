@@ -57,7 +57,9 @@ class FakeElement {
     this.attributes.delete(name);
   }
 
-  focus(): void {}
+  focus(): void {
+    focusedElement = this;
+  }
 
   querySelector<T extends Element>(selector: string): T | null {
     return this.querySelectorAll<T>(selector)[0] ?? null;
@@ -75,6 +77,8 @@ class FakeElement {
     return matches as unknown as T[];
   }
 }
+
+let focusedElement: FakeElement | null = null;
 
 function matchesSelector(element: FakeElement, selector: string): boolean {
   const match = selector.match(/^\[data-([a-z-]+)(?:=['"]([^'"]+)['"])?\]$/);
@@ -116,6 +120,8 @@ async function withAlertsView(
   const previousDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
   const previousCustomEvent = Object.getOwnPropertyDescriptor(globalThis, "CustomEvent");
   const originalListAlerts = inventoryIpc.listAlerts;
+  const originalMarkAlertReviewed = inventoryIpc.markAlertReviewed;
+  focusedElement = null;
   const elements: AlertElements = {
     "#alerts-status": new FakeElement("p"),
     "#alerts-list": new FakeElement("div"),
@@ -154,6 +160,7 @@ async function withAlertsView(
     await run(elements, openedUnits, mountAlertsView());
   } finally {
     inventoryIpc.listAlerts = originalListAlerts;
+    inventoryIpc.markAlertReviewed = originalMarkAlertReviewed;
     if (previousWindow) Object.defineProperty(globalThis, "window", previousWindow);
     else delete (globalThis as typeof globalThis & { window?: unknown }).window;
     if (previousDocument) Object.defineProperty(globalThis, "document", previousDocument);
@@ -161,6 +168,15 @@ async function withAlertsView(
     if (previousCustomEvent) Object.defineProperty(globalThis, "CustomEvent", previousCustomEvent);
     else delete (globalThis as typeof globalThis & { CustomEvent?: unknown }).CustomEvent;
   }
+}
+
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.fail("Tiempo agotado esperando " + label);
 }
 
 function openButton(list: FakeElement): FakeElement {
@@ -254,5 +270,63 @@ test("la vista anuncia un error de carga sin dejar controles ocupados", async ()
     assert.equal(elements["#alerts-refresh"].attributes.has("aria-busy"), false);
     assert.equal(elements["#alerts-list"].attributes.has("aria-busy"), false);
     assert.match(elements["#alerts-list"].textContent, /No se pudieron cargar las alertas/);
+  });
+});
+
+test("marcar una alerta como revisada actualiza la tarjeta y mueve el foco al registro", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    const alert = makeAlert();
+    let reviewedAlertId = "";
+    inventoryIpc.listAlerts = async () => [alert];
+    inventoryIpc.markAlertReviewed = async (alertId) => {
+      reviewedAlertId = alertId;
+      return { ...alert, status: "reviewed" };
+    };
+    await view.refresh();
+
+    const reviewButton = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-action='review']");
+    assert.ok(reviewButton);
+    reviewButton.dispatch("click");
+
+    await waitFor(
+      () => elements["#alerts-status"].dataset.kind === "success",
+      "la confirmación de la revisión",
+    );
+    const card = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-id]");
+    assert.ok(card);
+    const openMovementButton = card.querySelector<FakeElement>("[data-alert-action='open-event']");
+    assert.ok(openMovementButton);
+    assert.equal(reviewedAlertId, alert.id);
+    assert.match(card.textContent, /Revisada/);
+    assert.equal(card.querySelector("[data-alert-action='review']"), null);
+    assert.equal(focusedElement, openMovementButton);
+    assert.equal(elements["#alerts-status"].textContent, "Alerta “position_occupied” marcada como revisada.");
+  });
+});
+
+test("si falla la revisión, la alerta sigue abierta y el foco vuelve al botón", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    const alert = makeAlert();
+    inventoryIpc.listAlerts = async () => [alert];
+    inventoryIpc.markAlertReviewed = async () => {
+      throw new Error("SQLite no pudo actualizar la alerta");
+    };
+    await view.refresh();
+
+    const reviewButton = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-action='review']");
+    assert.ok(reviewButton);
+    reviewButton.dispatch("click");
+
+    await waitFor(
+      () => elements["#alerts-status"].dataset.kind === "error",
+      "el error de revisión",
+    );
+    const card = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-id]");
+    assert.ok(card);
+    assert.match(card.textContent, /Abierta/);
+    assert.equal(reviewButton.disabled, false);
+    assert.equal(card.querySelector("[data-alert-action='review']"), reviewButton);
+    assert.equal(focusedElement, reviewButton);
+    assert.equal(elements["#alerts-status"].textContent, "SQLite no pudo actualizar la alerta");
   });
 });
