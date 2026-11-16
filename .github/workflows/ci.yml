@@ -125,6 +125,15 @@ jobs:
       - name: Install Tauri end-to-end test dependencies
         run: npm ci --prefix e2e-tests
 
+      - name: Install gsudo for WebView2 acceptance
+        shell: pwsh
+        run: |
+          choco install gsudo --version=2.6.1 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $gsudo = Join-Path $env:ChocolateyInstall "lib\gsudo\tools\x64\gsudo.exe"
+          if (-not (Test-Path -LiteralPath $gsudo -PathType Leaf)) { throw "No se encontró gsudo en $gsudo." }
+          "ARIADNA_GSUDO_BINARY=$gsudo" >> $env:GITHUB_ENV
+
       - name: Run Tauri end-to-end acceptance
         shell: pwsh
         env:
@@ -133,7 +142,8 @@ jobs:
           APPDATA: ${{ runner.temp }}/ariadna-e2e/appdata
         run: |
           New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
-          npm test --prefix e2e-tests
+          icacls "$env:GITHUB_WORKSPACE" /grant "Everyone:(OI)(CI)F" | Out-Null
+          & $env:ARIADNA_GSUDO_BINARY --integrity Medium npm test --prefix e2e-tests
           $testExitCode = $LASTEXITCODE
           if ($testExitCode -ne 0) {
             $diagnosticPath = Join-Path $env:ARIADNA_E2E_ARTIFACTS "ariadna-tauri-e2e-diagnostic.json"
