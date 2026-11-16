@@ -443,15 +443,75 @@ test("el despacho cancelado no escribe y el confirmado espera la respuesta de Ru
 
     resolveDispatch?.({ eventId: dispatchInput!.eventId, outcome: "applied" });
     await waitFor(
-      () => elements.get("#operation-result-status")!.dataset.kind === "success",
+      () => elements.get("#operation-result-status")!.dataset.kind === "success"
+        && !elements.get("#dispatch-unit")!.children.some((option) => option.value === storedUnit.id),
       "la confirmación del despacho",
     );
     assert.match(elements.get("#operation-result-status")!.textContent, /Despacho confirmada por Rust/);
     assert.match(elements.get("#operation-history-details")!.textContent, /Despacho/);
     assert.match(elements.get("#operation-history-details")!.textContent, /P-01/);
     assert.match(elements.get("#operation-history-details")!.textContent, /Evento/);
+    assert.equal(elements.get("#dispatch-submit")!.disabled, true, "sin unidades almacenadas no debe poder iniciarse otro despacho");
   }, () => {
     confirmationCount += 1;
     return shouldConfirm;
+  });
+});
+
+test("un despacho rechazado conserva la unidad y no anuncia éxito", async () => {
+  const storedUnit: HandlingUnitDto = {
+    id: "unit-stored-rejected",
+    label: "PAL-DISPATCH-REJECTED",
+    status: "stored",
+    currentLocationId: "position-1",
+    lines: [{ sku: "SKU-1", quantity: 2, lotCode: null }],
+  };
+  const locations: LocationDto[] = [
+    { id: "zone-1", code: "Z-1", name: "Zona 1", kind: "zone", parentId: null, active: true },
+    { id: "aisle-1", code: "A-1", name: "Pasillo 1", kind: "aisle", parentId: "zone-1", active: true },
+    { id: "rack-1", code: "R-1", name: "Rack 1", kind: "rack", parentId: "aisle-1", active: true },
+    { id: "position-1", code: "P-01", name: "Posición 1", kind: "position", parentId: "rack-1", active: true },
+  ];
+  let dispatchInput: Parameters<typeof inventoryIpc.dispatchUnit>[0] | null = null;
+  let historyReads = 0;
+
+  await withOperationsView({
+    listProducts: async () => products,
+    listHandlingUnits: async () => [storedUnit],
+    listLocations: async () => locations,
+    dispatchUnit: async (input) => {
+      dispatchInput = structuredClone(input);
+      throw new AriadnaIpcError({
+        code: "invalid_transition",
+        message: "La unidad ya no está almacenada.",
+      });
+    },
+    getMovementHistory: async () => {
+      historyReads += 1;
+      return [];
+    },
+  }, async (elements) => {
+    elements.get("tab:dispatch")!.dispatch("click");
+    elements.get("#dispatch-unit")!.value = storedUnit.id;
+    assert.equal(elements.get("#dispatch-operation-fields")!.disabled, false);
+    assert.equal(elements.get("#dispatch-unit")!.value, storedUnit.id);
+    elements.get("#dispatch-operation-form")!.dispatch("submit");
+
+    await waitFor(() => dispatchInput !== null, "la solicitud de despacho a Rust");
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "error"
+        && !elements.get("#dispatch-submit")!.disabled,
+      "el rechazo de Rust y la reactivación del formulario",
+    );
+
+    assert.ok(dispatchInput);
+    assert.equal(dispatchInput!.handlingUnitId, storedUnit.id);
+    assert.equal(dispatchInput!.originLocationId, storedUnit.currentLocationId);
+    assert.match(elements.get("#operation-result-status")!.textContent, /La unidad ya no está almacenada/);
+    assert.doesNotMatch(elements.get("#operation-result-status")!.textContent, /Despacho confirmado/);
+    assert.equal(elements.get("#operation-retry")!.hidden, true, "un rechazo de dominio no debe ofrecer reintento incierto");
+    assert.equal(elements.get("#dispatch-operation-fields")!.disabled, false);
+    assert.equal(elements.get("#dispatch-unit")!.children.some((option) => option.value === storedUnit.id), true);
+    assert.equal(historyReads, 0, "un despacho rechazado no debe mostrarse como movimiento confirmado");
   });
 });

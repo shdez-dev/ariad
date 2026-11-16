@@ -343,6 +343,9 @@ export function mountOperationsView(): { refresh: () => Promise<void> } {
     fieldsets.store.disabled = busy || uncertainRetry !== null || loadFailed || received.length === 0 || freePositions.length === 0;
     fieldsets.move.disabled = busy || uncertainRetry !== null || loadFailed || stored.length === 0 || moveTargets.length === 0;
     fieldsets.dispatch.disabled = busy || uncertainRetry !== null || loadFailed || stored.length === 0;
+    for (const mode of Object.keys(submits) as OperationMode[]) {
+      submits[mode].disabled = busy || fieldsets[mode].disabled;
+    }
     refreshButton.disabled = busy;
     const lineRows = [...receiveLines.querySelectorAll<HTMLElement>(".receive-line-row")];
     addLineButton.disabled = busy || products.length === 0 || lineRows.length >= MAX_RECEIVE_LINES;
