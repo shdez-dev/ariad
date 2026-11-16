@@ -55,14 +55,22 @@ $ariadnaDataDirectory = Join-Path $env:APPDATA "com.ariadna.inventory"
 $ariadnaDatabase = Join-Path $ariadnaDataDirectory "ariadna.sqlite3"
 $ariadnaBackup = "C:\ruta\al\respaldo\ariadna-AAAAMMDD-HHMMSS.sqlite3"
 if (-not (Test-Path -LiteralPath $ariadnaBackup)) { throw "No se encontró el respaldo indicado." }
+$ariadnaExpectedHash = "PEGA_AQUI_EL_SHA256_REGISTRADO_AL_CREAR_LA_COPIA"
+if ($ariadnaExpectedHash -notmatch '^[A-Fa-f0-9]{64}$') { throw "Introduce el SHA-256 de 64 caracteres que guardaste al crear la copia." }
+$ariadnaExpectedHash = $ariadnaExpectedHash.ToUpperInvariant()
+$ariadnaBackupHash = (Get-FileHash -LiteralPath $ariadnaBackup -Algorithm SHA256).Hash.ToUpperInvariant()
+if ($ariadnaBackupHash -ne $ariadnaExpectedHash) { throw "El respaldo no coincide con el SHA-256 registrado; no reemplaces la base actual." }
 $ariadnaTimestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $ariadnaRecoveryDirectory = Join-Path $ariadnaDataDirectory ("ariadna-recuperacion-" + $ariadnaTimestamp)
 $ariadnaRestoreStaging = Join-Path $ariadnaDataDirectory ("ariadna-restaurada-" + $ariadnaTimestamp + ".sqlite3")
-$ariadnaExpectedHash = (Get-FileHash -LiteralPath $ariadnaBackup -Algorithm SHA256).Hash
-New-Item -ItemType Directory -Path $ariadnaRecoveryDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $ariadnaDataDirectory | Out-Null
 Copy-Item -LiteralPath $ariadnaBackup -Destination $ariadnaRestoreStaging
-$ariadnaStagingHash = (Get-FileHash -LiteralPath $ariadnaRestoreStaging -Algorithm SHA256).Hash
-if ($ariadnaStagingHash -ne $ariadnaExpectedHash) { throw "El hash de la copia preparada no coincide; no reemplaces la base actual." }
+$ariadnaStagingHash = (Get-FileHash -LiteralPath $ariadnaRestoreStaging -Algorithm SHA256).Hash.ToUpperInvariant()
+if ($ariadnaStagingHash -ne $ariadnaExpectedHash) {
+    Remove-Item -LiteralPath $ariadnaRestoreStaging -Force -ErrorAction SilentlyContinue
+    throw "La copia preparada no coincide con el SHA-256 registrado; no se reemplazó la base actual."
+}
+New-Item -ItemType Directory -Path $ariadnaRecoveryDirectory | Out-Null
 foreach ($ariadnaSidecarSuffix in @("-wal", "-shm")) {
     $ariadnaSidecarPath = $ariadnaDatabase + $ariadnaSidecarSuffix
     if (Test-Path -LiteralPath $ariadnaSidecarPath) { Move-Item -LiteralPath $ariadnaSidecarPath -Destination $ariadnaRecoveryDirectory }
@@ -72,7 +80,7 @@ Move-Item -LiteralPath $ariadnaRestoreStaging -Destination $ariadnaDatabase
 Get-FileHash -LiteralPath $ariadnaDatabase -Algorithm SHA256
 ```
 
-Reemplaza `C:\ruta\al\respaldo\ariadna-AAAAMMDD-HHMMSS.sqlite3` por la ruta real del respaldo antes de ejecutar el bloque. El bloque prepara una copia temporal, compara su SHA-256 con el respaldo y solo entonces aparta la base actual y sus archivos `-wal`/`-shm` en una carpeta de recuperación fechada. No borres esa carpeta hasta confirmar la restauración.
+Reemplaza la ruta del respaldo y `PEGA_AQUI_EL_SHA256_REGISTRADO_AL_CREAR_LA_COPIA` por los valores reales antes de ejecutar el bloque. El SHA-256 debe ser el valor conservado al crear la copia, no uno calculado ahora. El bloque coteja el archivo de origen con ese valor y vuelve a comprobar la copia temporal antes de apartar la base actual y sus archivos `-wal`/`-shm` en una carpeta de recuperación fechada. Si el primer cotejo falla, la base actual no se toca; si falla el segundo, se elimina el archivo temporal y tampoco se reemplaza la base. El hash detecta cambios respecto del valor conservado, pero no acredita por sí solo que el archivo provenga de una fuente confiable ni que SQLite pueda abrirlo. No borres la carpeta de recuperación hasta confirmar la restauración.
 
 4. Inicia Ariadna. Comprueba que abre sin error y que aparecen productos, ubicaciones, pallets e historial que esperas recuperar. La aplicación aplica las migraciones pendientes al iniciar.
 5. Si los datos no son los esperados o la aplicación no inicia, ciérrala. Devuelve `ariadna.sqlite3` desde la carpeta `ariadna-recuperacion-...` al directorio de datos y devuelve junto a él cualquier `ariadna.sqlite3-wal` y `ariadna.sqlite3-shm` que se haya apartado; luego vuelve a iniciar Ariadna.
