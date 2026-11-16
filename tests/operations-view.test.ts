@@ -243,6 +243,8 @@ test("reintenta una recepción incierta con el mismo identificador y payload y r
     const retry = elements.get("#operation-retry")!;
     await waitFor(() => writes.length === 1 && !retry.hidden, "aparece el reintento de recepción");
     assert.equal(retry.hidden, false, "un fallo de almacenamiento debe ofrecer un reintento explícito");
+    assert.equal(elements.get("#operation-result-status")!.dataset.kind, "error");
+    assert.match(elements.get("#operation-result-status")!.textContent, /No se pudo confirmar el almacenamiento/);
     assert.equal(elements.get("#receive-operation-fields")!.disabled, true);
     assert.match(elements.get("#operation-availability")!.textContent, /datos e identificador se conservan/);
 
