@@ -60,6 +60,9 @@ jobs:
       - name: Test units view request concurrency
         run: npm run test:units-view
 
+      - name: Test units view rendering and history navigation
+        run: npm run test:units-view-dom
+
       - name: Test catalog model
         run: npm run test:catalog
 

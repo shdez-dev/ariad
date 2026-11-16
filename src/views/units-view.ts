@@ -4,10 +4,10 @@ import {
   type HandlingUnitDto,
   type LocationDto,
   type MovementHistoryEntryDto,
-} from "../lib/ipc";
-import { getLocationPath } from "../lib/catalog-model";
-import { findHistoryEntry, movementOccurredLabel } from "../lib/simulator-model";
-import { createUnitsViewRequestGuard } from "../lib/units-view-request-guard";
+} from "../lib/ipc.ts";
+import { getLocationPath } from "../lib/catalog-model.ts";
+import { findHistoryEntry, movementOccurredLabel } from "../lib/simulator-model.ts";
+import { createUnitsViewRequestGuard } from "../lib/units-view-request-guard.ts";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
