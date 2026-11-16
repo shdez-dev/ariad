@@ -13,6 +13,7 @@
     "test:catalog-views": "node --experimental-strip-types --test tests/catalog-edit-request-guard.test.ts",
     "test:catalog": "node --experimental-strip-types --test tests/catalog-model.test.ts",
     "test:simulator": "node --experimental-strip-types --test tests/simulator-model.test.ts",
+    "test:simulator-view": "node --experimental-strip-types --test tests/simulator-view.test.ts",
     "test:ipc": "node --experimental-strip-types --test tests/ipc-error.test.ts",
     "test:search": "node --experimental-strip-types --test tests/search-view.test.ts",
     "test:accessibility": "node --experimental-strip-types --test tests/ui-accessibility.test.ts",

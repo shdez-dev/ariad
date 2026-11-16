@@ -1,11 +1,11 @@
-import { AriadnaIpcError, inventoryIpc, type SimulationStepDto } from "../lib/ipc";
+import { AriadnaIpcError, inventoryIpc, type SimulationStepDto } from "../lib/ipc.ts";
 import {
   isSimulationScenario,
   simulationResultLabel,
   simulationResultTone,
   simulationScenarioLabel,
   validateSimulationSeed,
-} from "../lib/simulator-model";
+} from "../lib/simulator-model.ts";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
