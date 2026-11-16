@@ -501,6 +501,71 @@ test("completa recepción, asignación y traslado con datos refrescados y el his
   });
 });
 
+test("si la posición se ocupa antes de confirmar, informa el rechazo y refresca destinos sin mutar la unidad", async () => {
+  const receivedUnit: HandlingUnitDto = {
+    id: "unit-awaiting-location",
+    label: "PAL-RECEIVED-1",
+    status: "received",
+    currentLocationId: null,
+    lines: [{ sku: "SKU-1", quantity: 2, lotCode: null }],
+  };
+  let competingUnit: HandlingUnitDto | null = null;
+  let storeInput: Parameters<typeof inventoryIpc.storeUnit>[0] | null = null;
+  let historyReads = 0;
+  const locations: LocationDto[] = [
+    { id: "position-1", code: "P-01", name: "Posición 1", kind: "position", parentId: null, active: true },
+    { id: "position-2", code: "P-02", name: "Posición 2", kind: "position", parentId: null, active: true },
+    { id: "position-3", code: "P-03", name: "Posición 3", kind: "position", parentId: null, active: true },
+  ];
+
+  await withOperationsView({
+    listProducts: async () => products,
+    listHandlingUnits: async () => competingUnit ? [receivedUnit, competingUnit] : [receivedUnit],
+    listLocations: async () => locations,
+    storeUnit: async (input) => {
+      storeInput = structuredClone(input);
+      competingUnit = {
+        id: "unit-from-concurrent-receipt",
+        label: "PAL-CONCURRENT-1",
+        status: "stored",
+        currentLocationId: input.destinationLocationId,
+        lines: [{ sku: "SKU-1", quantity: 1, lotCode: null }],
+      };
+      throw new AriadnaIpcError({
+        code: "position_occupied",
+        message: "La posición fue ocupada antes de confirmar.",
+      });
+    },
+    getMovementHistory: async () => {
+      historyReads += 1;
+      return [];
+    },
+  }, async (elements) => {
+    elements.get("tab:store")!.dispatch("click");
+    elements.get("#store-unit")!.value = receivedUnit.id;
+    elements.get("#store-destination")!.value = "position-2";
+    elements.get("#store-operation-form")!.dispatch("submit");
+
+    await waitFor(
+      () => elements.get("#operation-result-status")!.dataset.kind === "error"
+        && !elements.get("#store-submit")!.disabled,
+      "el rechazo de posición ocupada y la reactivación del formulario",
+    );
+
+    assert.ok(storeInput);
+    assert.equal(storeInput!.handlingUnitId, receivedUnit.id);
+    assert.equal(storeInput!.destinationLocationId, "position-2");
+    assert.match(elements.get("#operation-result-status")!.textContent, /La posición fue ocupada antes de confirmar/);
+    assert.doesNotMatch(elements.get("#operation-result-status")!.textContent, /confirmada por Rust/);
+    assert.equal(elements.get("#operation-retry")!.hidden, true);
+    assert.equal(elements.get("#store-unit")!.children.some((item) => item.value === receivedUnit.id), true);
+    assert.equal(elements.get("#store-destination")!.value, "");
+    assert.equal(elements.get("#store-destination")!.children.some((item) => item.value === "position-2"), false);
+    assert.equal(elements.get("#store-destination")!.children.some((item) => item.value === "position-1"), true);
+    assert.equal(historyReads, 0, "un rechazo de dominio no debe presentar un movimiento aceptado");
+  });
+});
+
 test("el despacho cancelado no escribe y el confirmado espera la respuesta de Rust", async () => {
   const storedUnit: HandlingUnitDto = {
     id: "unit-stored-1",
