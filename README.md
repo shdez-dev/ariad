@@ -61,7 +61,7 @@ El workflow de integración continua valida cada push y pull request en Windows.
 
 1. Completar y registrar criterio por criterio la aceptación visual pendiente de ARD-11 a ARD-15, incluidos navegación por teclado y lector de pantalla, CRUD, errores y estados vacíos. La [matriz de trazabilidad](docs/trazabilidad.md) detalla los puntos abiertos. Las suites automatizadas y su CI Windows ya cubren los escenarios funcionales asociados, pero no sustituyen la aceptación visual integrada.
 2. Ejecutar ARD-25: aceptar la versión candidata en instalación limpia y dejar registro de cambios y defectos remanentes.
-3. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar métricas sin piloto real como pendientes y proponer mejoras basadas en evidencia.
+3. Ejecutar ARD-26: consolidar mediciones reproducibles, marcar las métricas de operación real como no aplicables en esta etapa y proponer mejoras basadas en evidencia.
 
 ARD-24 quedó documentada en `docs/portfolio/README.md`, enlazada desde esta página y verificada por el CI Windows 43109513936.
 
