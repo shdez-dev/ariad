@@ -12,6 +12,8 @@ import { mountOperationsView } from "../src/views/operations-view.ts";
 
 type Listener = (event: { preventDefault(): void }) => void;
 
+let focusedElement: FakeElement | null = null;
+
 class FakeElement {
   readonly tagName: string;
   readonly children: FakeElement[] = [];
@@ -83,7 +85,9 @@ class FakeElement {
     this.attributes.set(name, value);
   }
 
-  focus(): void {}
+  focus(): void {
+    focusedElement = this;
+  }
 
   reportValidity(): boolean {
     return true;
@@ -160,6 +164,7 @@ async function withOperationsView(
   const previousIpc = new Map(
     Object.keys(overrides).map((key) => [key, Object.getOwnPropertyDescriptor(inventoryIpc, key)]),
   );
+  focusedElement = null;
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: {
@@ -512,6 +517,7 @@ test("un despacho rechazado conserva la unidad y no anuncia éxito", async () =>
     assert.equal(elements.get("#operation-retry")!.hidden, true, "un rechazo de dominio no debe ofrecer reintento incierto");
     assert.equal(elements.get("#dispatch-operation-fields")!.disabled, false);
     assert.equal(elements.get("#dispatch-unit")!.children.some((option) => option.value === storedUnit.id), true);
+    assert.equal(focusedElement, elements.get("#dispatch-submit"), "el foco debe volver al botón tras el rechazo");
     assert.equal(historyReads, 0, "un despacho rechazado no debe mostrarse como movimiento confirmado");
   });
 });
