@@ -330,3 +330,32 @@ test("si falla la revisión, la alerta sigue abierta y el foco vuelve al botón"
     assert.equal(elements["#alerts-status"].textContent, "SQLite no pudo actualizar la alerta");
   });
 });
+
+test("si se refresca mientras falla la revisión, el foco vuelve al botón visible", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    const alert = makeAlert();
+    let rejectReview: ((error: Error) => void) | undefined;
+    inventoryIpc.listAlerts = async () => [alert];
+    inventoryIpc.markAlertReviewed = () => new Promise((_resolve, reject) => {
+      rejectReview = reject;
+    });
+    await view.refresh();
+
+    const staleReviewButton = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-action='review']");
+    assert.ok(staleReviewButton);
+    staleReviewButton.dispatch("click");
+    assert.equal(staleReviewButton.disabled, true);
+
+    await view.refresh();
+    const currentReviewButton = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-action='review']");
+    assert.ok(currentReviewButton);
+    assert.notEqual(currentReviewButton, staleReviewButton);
+
+    assert.ok(rejectReview);
+    rejectReview(new Error("No se pudo revisar"));
+    await waitFor(() => elements["#alerts-status"].dataset.kind === "error", "el error de revisión concurrente");
+
+    assert.equal(currentReviewButton.disabled, false);
+    assert.equal(focusedElement, currentReviewButton);
+  });
+});

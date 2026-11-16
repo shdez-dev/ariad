@@ -207,8 +207,15 @@ export function mountAlertsView(): {
       focusTarget.focus();
     } catch (error: unknown) {
       setStatus(messageFor(error), "error");
-      button.disabled = false;
-      button.focus();
+      const card = [...list.querySelectorAll<HTMLElement>("[data-alert-id]")]
+        .find((item) => item.dataset.alertId === alert.id);
+      const currentReviewButton = card?.querySelector<HTMLButtonElement>("[data-alert-action='review']");
+      if (currentReviewButton) {
+        currentReviewButton.disabled = false;
+        currentReviewButton.focus();
+      } else {
+        refreshButton.focus();
+      }
     }
   }
 
