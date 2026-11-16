@@ -121,7 +121,16 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     await driver.wait(async () => (
       await driver.findElement(By.css("#simulator-status")).getAttribute("data-kind")
     ) === "success", 45_000, "La anomalía debe quedar registrada por IPC");
-    await driver.findElement(By.css("#simulator-steps [data-simulation-step-id] .primary-button")).click();
+    const anomalyStep = driver.findElement(By.css("#simulator-steps [data-simulation-step-id]"));
+    const anomalyActions = await anomalyStep.findElements(By.css("button"));
+    assert.equal(anomalyActions.length, 2);
+    assert.equal(await anomalyActions[0].getText(), "Mostrar registro exacto");
+    await anomalyActions[0].click();
+    const attemptDetail = await driver.findElement(By.css("#simulator-record-detail")).getText();
+    assert.match(attemptDetail, /REGISTRO SINTÉTICO/);
+    assert.match(attemptDetail, /attempt:/);
+    assert.match(attemptDetail, /Sin unidad persistida/);
+    await anomalyActions[1].click();
 
     await driver.wait(async () => await driver.findElement(By.css("#view-alerts")).isDisplayed(), 5_000);
     const alertCard = await driver.wait(

@@ -4233,11 +4233,12 @@ mod tests {
         let alerts = ListAlerts::new(repository.clone()).execute().await.unwrap();
         assert_eq!(alerts.len(), 4);
         let cases = [
-            (&duplicate.steps[3], "duplicate", None, true),
+            (&duplicate.steps[3], "duplicate", None, true, true),
             (
                 &unknown.steps[0],
                 "rejected",
                 Some("handling_unit_not_found"),
+                false,
                 false,
             ),
             (
@@ -4245,16 +4246,18 @@ mod tests {
                 "rejected",
                 Some("invalid_destination"),
                 false,
+                true,
             ),
             (
                 &occupied.steps[3],
                 "rejected",
                 Some("position_occupied"),
                 false,
+                true,
             ),
         ];
 
-        for (step, expected_result, expected_reason, is_duplicate) in cases {
+        for (step, expected_result, expected_reason, is_duplicate, has_unit_record) in cases {
             assert_eq!(step.result, expected_result);
             let record_id = step.record_id.as_deref().expect("intento con recordId");
             let attempt_id = record_id
@@ -4271,7 +4274,10 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(attempt.0, step.event_id.as_deref().unwrap());
-            assert_eq!(attempt.1, step.handling_unit_id.as_deref().unwrap());
+            assert_eq!(step.handling_unit_id.is_some(), has_unit_record);
+            if let Some(handling_unit_id) = step.handling_unit_id.as_deref() {
+                assert_eq!(attempt.1, handling_unit_id);
+            }
             assert_eq!(attempt.2, expected_result);
             assert_eq!(attempt.3.as_deref(), expected_reason);
             assert_eq!(attempt.4, "simulator");
@@ -4312,13 +4318,7 @@ mod tests {
             assert!(history.iter().any(|entry| entry.record_id == record_id));
         }
 
-        assert!(
-            unknown.steps[0]
-                .handling_unit_id
-                .as_deref()
-                .unwrap()
-                .contains("unknown-label")
-        );
+        assert!(unknown.steps[0].handling_unit_id.is_none());
         let unknown_alert = alerts
             .iter()
             .find(|alert| alert.alert.id == unknown.steps[0].alert_id.as_deref().unwrap())

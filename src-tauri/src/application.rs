@@ -1291,13 +1291,16 @@ impl RunSimulation {
                 &intent,
             )
             .await?;
-        Ok(vec![step_from_record_outcome(
+        let mut step = step_from_record_outcome(
             "unknown-label",
             "Lectura de etiqueta desconocida",
             &event_id,
             &unknown_ref,
             result,
-        )])
+        );
+        // The attempt retains the scanned identifier, but no unit exists to open.
+        step.handling_unit_id = None;
+        Ok(vec![step])
     }
 
     async fn run_invalid_location(

@@ -246,7 +246,7 @@ test("una anomalía sin ficha conserva visible la referencia del intento exacto"
       movementAttemptId: 57,
       targetKind: "movement_attempt",
       eventId: "unknown-label-event",
-      handlingUnitId: "",
+      handlingUnitId: "unknown-handling-unit-57",
       handlingUnitLabel: null,
       eventResult: "rejected",
       eventRejectionReason: "handling_unit_not_found",
@@ -260,6 +260,7 @@ test("una anomalía sin ficha conserva visible la referencia del intento exacto"
     assert.ok(preview);
     assert.match(preview.textContent, /Identificador: attempt:57/);
     assert.match(preview.textContent, /Intento 57 · evento unknown-label-event/);
+    assert.match(elements["#alerts-list"].textContent, /Sin ficha registrada · unknown-handling-unit-57/);
     assert.deepEqual(openedUnits, []);
   });
 });

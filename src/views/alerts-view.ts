@@ -125,7 +125,7 @@ export function mountAlertsView(): {
         `Abrir movimiento ${eventKindLabel(alert.eventKind)} asociado a la alerta ${alert.kind} de ${alert.handlingUnitLabel ?? "un intento sin unidad registrada"}`,
       );
       openButton.addEventListener("click", () => {
-        if (!alert.handlingUnitId) {
+        if (!alert.handlingUnitId || !alert.handlingUnitLabel) {
           expandedRecordAlertId = expandedRecordAlertId === alert.id ? null : alert.id;
           render();
           const preview = [...list.querySelectorAll<HTMLElement>("[data-alert-record-preview]")]
