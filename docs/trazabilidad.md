@@ -337,4 +337,10 @@ El commit documental anterior, `a8f3e94`, pasó CI Windows [43945066158](https:/
 
 Una prueba nueva reproduce el caso en que se inicia «Marcar revisada», se vuelve a cargar la lista y luego falla la escritura IPC. La recarga reemplaza el DOM y deja desconectado el botón original. Antes, el error devolvía el foco a ese elemento obsoleto. La vista ahora busca el botón de revisión vigente de la tarjeta; si ya no existe, enfoca Actualizar alertas.
 
-Verificación local: npm run test:alerts-view (7 pruebas), npm test (15 suites, 93 pruebas), npm run build y git diff --check pasan. El test focal falló antes del cambio y pasó después. La prueba usa DOM e IPC simulados; no valida WebView, teclado real ni lector de pantalla. El CI Windows del commit que contiene este cambio queda pendiente.
+Verificación local: npm run test:alerts-view (7 pruebas), npm test (15 suites, 93 pruebas), npm run build y git diff --check pasan. El test focal falló antes del cambio y pasó después. La prueba usa DOM e IPC simulados; no valida WebView, teclado real ni lector de pantalla. CI Windows [43949287535](https://github.com/shdez-dev/ariad/actions/runs/43949287535) pasó para 6dab602 y publicó NSIS 2.26 MB (SHA-256 7ece60cd5ccb434734663c77c8d78d0ed7106fa862c7f6269c45f18c8d849e34). La aceptación integrada sigue pendiente.
+
+## Enfocar Actualizar alertas si la tarjeta desaparece durante la revisión, ARD-14
+
+Un caso adicional deja pendiente la revisión IPC, refresca la lista hasta que la alerta desaparece y luego rechaza la escritura. La vista no intenta enfocar una tarjeta inexistente y devuelve el foco al botón Actualizar alertas.
+
+Verificación local: npm run test:alerts-view (8 pruebas), npm test (15 suites, 94 pruebas), npm run build y git diff --check pasan. El fake DOM valida la selección del destino de foco; la aceptación con WebView, teclado y lector de pantalla sigue pendiente. El CI Windows de este follow-up queda pendiente.

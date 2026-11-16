@@ -359,3 +359,29 @@ test("si se refresca mientras falla la revisión, el foco vuelve al botón visib
     assert.equal(focusedElement, currentReviewButton);
   });
 });
+
+test("si la alerta desaparece durante una revisión fallida, el foco vuelve a actualizar", async () => {
+  await withAlertsView(async (elements, _openedUnits, view) => {
+    const alert = makeAlert();
+    let rejectReview: ((error: Error) => void) | undefined;
+    inventoryIpc.listAlerts = async () => [alert];
+    inventoryIpc.markAlertReviewed = () => new Promise((_resolve, reject) => {
+      rejectReview = reject;
+    });
+    await view.refresh();
+
+    const reviewButton = elements["#alerts-list"].querySelector<FakeElement>("[data-alert-action='review']");
+    assert.ok(reviewButton);
+    reviewButton.dispatch("click");
+
+    inventoryIpc.listAlerts = async () => [];
+    await view.refresh();
+    assert.match(elements["#alerts-list"].textContent, /No hay alertas guardadas/);
+
+    assert.ok(rejectReview);
+    rejectReview(new Error("La alerta ya no está disponible"));
+    await waitFor(() => elements["#alerts-status"].dataset.kind === "error", "el error de revisión tras eliminar la alerta");
+
+    assert.equal(focusedElement, elements["#alerts-refresh"]);
+  });
+});
