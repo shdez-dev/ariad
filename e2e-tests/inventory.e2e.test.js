@@ -177,9 +177,12 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
 
     await driver.findElement(By.css('#alerts-list [data-alert-action="review"]')).click();
     currentStage = "persistir la revisión de la alerta";
-    await driver.wait(async () => (
-      await driver.findElement(By.css("#alerts-list .alert-status-reviewed")).getText()
-    ) === "Revisada", 15_000, "La revisión debe persistirse en SQLite");
+    const reviewedBadge = await driver.wait(
+      until.elementLocated(By.css("#alerts-list .alert-status-reviewed")),
+      15_000,
+      "La revisión debe persistirse en SQLite",
+    );
+    assert.equal(await reviewedBadge.getText(), "Revisada");
     assert.equal((await driver.findElements(By.css('#alerts-list [data-alert-action="review"]'))).length, 0,
       "una alerta revisada no debe ofrecer de nuevo la misma acción");
     await saveScreenshot(driver, "ariadna-tauri-e2e-alert.png");
