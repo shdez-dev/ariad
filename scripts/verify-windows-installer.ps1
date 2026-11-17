@@ -41,6 +41,7 @@ $relaunchPassed = $false
 $uninstallPassed = $false
 $appDataRetained = $false
 $installerHash = "No disponible"
+$installerSizeBytes = "No disponible"
 $signatureStatus = "No disponible"
 $osCaption = (Get-CimInstance Win32_OperatingSystem).Caption
 $osVersion = (Get-CimInstance Win32_OperatingSystem).Version
@@ -53,6 +54,7 @@ try {
 
     $resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
     $installerHash = (Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256).Hash
+    $installerSizeBytes = (Get-Item -LiteralPath $resolvedInstaller).Length
     $signatureStatus = (Get-AuthenticodeSignature -LiteralPath $resolvedInstaller).Status.ToString()
 
     if ($signatureStatus -ne "NotSigned") {
@@ -207,6 +209,8 @@ Runner Windows: $osCaption ($osVersion)
 Instalador: ``$(Split-Path -Leaf $InstallerPath)``
 
 SHA-256: ``$installerHash``
+
+Tamaño (bytes): **$installerSizeBytes**
 
 Firma Authenticode: **$signatureStatus**
 

@@ -180,9 +180,21 @@ jobs:
           $evidence = [System.IO.File]::ReadAllText($evidencePath).Trim()
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "### Verificación NSIS`n`n$evidence"
           $failureMatch = [regex]::Match($evidence, '(?m)^Detalle del resultado: (.+)$')
-          if ($failureMatch.Success -and $failureMatch.Groups[1].Value -ne "Sin errores.") {
-            $detail = $failureMatch.Groups[1].Value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+          $failureDetail = if ($failureMatch.Success) { $failureMatch.Groups[1].Value.Trim() } else { "No se encontró el detalle del resultado." }
+          if ($failureDetail -ne "Sin errores.") {
+            $detail = $failureDetail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
             Write-Output "::error title=Verificación NSIS::$detail"
+          } else {
+            $installerMatch = [regex]::Match($evidence, '(?m)^Instalador: ``(.+)``$')
+            $sizeMatch = [regex]::Match($evidence, '(?m)^Tamaño \(bytes\): \*\*(\d+)\*\*$')
+            $hashMatch = [regex]::Match($evidence, '(?m)^SHA-256: ``([A-Fa-f0-9]{64})``$')
+            if ($installerMatch.Success -and $sizeMatch.Success -and $hashMatch.Success) {
+              $notice = "Correcta; $($installerMatch.Groups[1].Value.Trim()); $($sizeMatch.Groups[1].Value) bytes; SHA-256 $($hashMatch.Groups[1].Value)"
+              $notice = $notice.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+              Write-Output "::notice title=Verificación NSIS::$notice"
+            } else {
+              Write-Output "::warning title=Verificación NSIS::Ciclo correcto; no se pudo leer el nombre, tamaño y hash del instalador."
+            }
           }
 
       - name: Upload Windows installer and verification evidence
