@@ -130,6 +130,111 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     assert.match(unitDetail, /Ubicación\s+Sin ubicación/);
     assert.match(unitDetail, /Fecha simulada/);
     assert.match(unitDetail, /registrado/);
+    const unitLabel = await driver.findElement(By.css("#unit-details .detail-title")).getText();
+
+    currentStage = "comprobar la jerarquía, selección y detalle del mapa";
+    const mapNav = driver.findElement(By.css('[data-view-button="map"]'));
+    await mapNav.click();
+    await driver.wait(async () => await driver.findElement(By.css("#view-map")).isDisplayed(), 5_000);
+    const warehouseMapPanel = await driver.findElement(By.css("#map-panel"));
+    await driver.wait(async () => (await warehouseMapPanel.getAttribute("aria-busy")) !== "true", 30_000);
+    const positionCards = await driver.findElements(By.css("#warehouse-map [data-position-id]"));
+    assert.ok(positionCards.length > 0, "la jerarquía debe contener posiciones de bodega");
+    let freePosition;
+    for (const candidate of positionCards) {
+      if ((await candidate.getAttribute("class")).includes("state-free")) {
+        freePosition = candidate;
+        break;
+      }
+    }
+    assert.ok(freePosition, "el despacho debe dejar posiciones disponibles en el mapa");
+    const positionCode = await freePosition.findElement(By.css(".position-code")).getText();
+    assert.match(await freePosition.getAttribute("aria-label"), /Libre/);
+    await freePosition.click();
+    await driver.wait(async () => (
+      await driver.findElement(By.css("#position-details .detail-title")).getText()
+    ) === positionCode, 10_000, "el mapa debe mostrar el detalle de la posición seleccionada");
+    assert.match(
+      await driver.findElement(By.css("#position-details")).getText(),
+      /No hay un pallet almacenado/,
+    );
+
+    currentStage = "comprobar el catálogo de productos y su filtro";
+    const productsNav = driver.findElement(By.css('[data-view-button="products"]'));
+    await productsNav.click();
+    await driver.wait(async () => await driver.findElement(By.css("#view-products")).isDisplayed(), 5_000);
+    const productSkuElement = await driver.wait(
+      until.elementLocated(By.css("#products-table-body .table-primary-text")),
+      15_000,
+      "el producto del escenario debe aparecer en el catálogo",
+    );
+    const productSku = await productSkuElement.getText();
+    const productFilter = driver.findElement(By.css("#products-filter"));
+    await productFilter.sendKeys(productSku);
+    await driver.wait(async () => {
+      const visibleProducts = await driver.findElements(By.css("#products-table-body .table-primary-text"));
+      return visibleProducts.length === 1 && (await visibleProducts[0].getText()) === productSku;
+    }, 10_000, "el filtro debe conservar el SKU coincidente");
+
+    currentStage = "comprobar la jerarquía del catálogo de ubicaciones y su filtro";
+    const locationsNav = driver.findElement(By.css('[data-view-button="locations"]'));
+    await locationsNav.click();
+    await driver.wait(async () => await driver.findElement(By.css("#view-locations")).isDisplayed(), 5_000);
+    const locationCodeElement = await driver.wait(
+      until.elementLocated(By.css("#locations-table-body .table-primary-text")),
+      15_000,
+      "la jerarquía sintética debe aparecer en el catálogo de ubicaciones",
+    );
+    const locationCode = await locationCodeElement.getText();
+    const locationFilter = driver.findElement(By.css("#locations-filter"));
+    await locationFilter.sendKeys(locationCode);
+    await driver.wait(async () => {
+      const visibleLocations = await driver.findElements(By.css("#locations-table-body .table-primary-text"));
+      return visibleLocations.length === 1 && (await visibleLocations[0].getText()) === locationCode;
+    }, 10_000, "el filtro debe conservar el código coincidente");
+
+    currentStage = "comprobar búsqueda transversal de producto, unidad y ubicación";
+    const searchNav = driver.findElement(By.css('[data-view-button="search"]'));
+    await searchNav.click();
+    await driver.wait(async () => await driver.findElement(By.css("#view-search")).isDisplayed(), 5_000);
+    const searchInput = driver.findElement(By.css("#inventory-search-input"));
+    const searchResults = driver.findElement(By.css("#inventory-search-results"));
+
+    await searchInput.sendKeys(productSku);
+    await driver.wait(async () => (await searchResults.findElements(By.css(".search-result-button"))).length > 0,
+      10_000, "la búsqueda debe encontrar el SKU del producto");
+    let resultGroup = await searchResults.findElement(By.css(".search-result-group"));
+    assert.match(await resultGroup.findElement(By.css("h3")).getText(), /Producto/);
+    assert.ok((await resultGroup.findElement(By.css(".search-result-button")).getText()).includes(productSku));
+    await resultGroup.findElement(By.css(".search-result-button")).click();
+    await driver.wait(async () => (
+      await driver.findElement(By.css("#inventory-search-detail .detail-name")).getText()
+    ) === productSku, 10_000, "la búsqueda debe abrir el detalle del producto");
+
+    await searchInput.clear();
+    await searchInput.sendKeys(locationCode);
+    await driver.wait(async () => (await searchResults.findElements(By.css(".search-result-button"))).length > 0,
+      10_000, "la búsqueda debe encontrar el código de ubicación");
+    resultGroup = await searchResults.findElement(By.css(".search-result-group"));
+    assert.match(await resultGroup.findElement(By.css("h3")).getText(), /Ubicación/);
+    await resultGroup.findElement(By.css(".search-result-button")).click();
+    await driver.wait(async () => (
+      await driver.findElement(By.css("#inventory-search-detail .detail-title")).getText()
+    ) === locationCode, 10_000, "la búsqueda debe abrir el detalle de la ubicación");
+
+    await searchInput.clear();
+    await searchInput.sendKeys(unitLabel);
+    await driver.wait(async () => (await searchResults.findElements(By.css(".search-result-button"))).length > 0,
+      10_000, "la búsqueda debe encontrar la unidad despachada");
+    resultGroup = await searchResults.findElement(By.css(".search-result-group"));
+    assert.match(await resultGroup.findElement(By.css("h3")).getText(), /Unidad/);
+    assert.ok((await resultGroup.findElement(By.css(".search-result-button")).getText()).includes(unitLabel));
+    await resultGroup.findElement(By.css(".search-result-button")).click();
+    await driver.wait(async () => await driver.findElement(By.css("#view-units")).isDisplayed(), 5_000);
+    await driver.wait(async () => (
+      await driver.findElement(By.css("#unit-details .detail-title")).getText()
+    ) === unitLabel, 10_000, "la búsqueda debe abrir el historial de la unidad exacta");
+    assert.equal((await driver.findElements(By.css("#unit-details .movement-history-entry"))).length, 4);
 
     await simulatorNav.click();
     await driver.wait(async () => await driver.findElement(By.css("#view-simulator")).isDisplayed(), 5_000);
