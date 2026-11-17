@@ -46,6 +46,11 @@ async function saveScreenshot(driver, name) {
   await writeFile(resolve(artifactsDirectory, name), Buffer.from(await driver.takeScreenshot(), "base64"));
 }
 
+async function hasExactText(driver, selector, expected) {
+  const elements = await driver.findElements(By.css(selector));
+  return elements.length > 0 && (await elements[0].getText()) === expected;
+}
+
 test("Tauri integra el recorrido normal, el historial y una alerta revisable", async (t) => {
   const driverArguments = nativeDriverBinary ? ["--native-driver", nativeDriverBinary] : [];
   console.info(`[E2E] Aplicación: ${application}`);
@@ -151,9 +156,11 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     const positionCode = await freePosition.findElement(By.css(".position-code")).getText();
     assert.match(await freePosition.getAttribute("aria-label"), /Libre/);
     await freePosition.click();
-    await driver.wait(async () => (
-      await driver.findElement(By.css("#position-details .detail-title")).getText()
-    ) === positionCode, 10_000, "el mapa debe mostrar el detalle de la posición seleccionada");
+    await driver.wait(
+      () => hasExactText(driver, "#position-details .detail-title", positionCode),
+      10_000,
+      "el mapa debe mostrar el detalle de la posición seleccionada",
+    );
     assert.match(
       await driver.findElement(By.css("#position-details")).getText(),
       /No hay un pallet almacenado/,
@@ -207,9 +214,11 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     assert.match(await resultGroup.findElement(By.css("h3")).getText(), /Producto/);
     assert.ok((await resultGroup.findElement(By.css(".search-result-button")).getText()).includes(productSku));
     await resultGroup.findElement(By.css(".search-result-button")).click();
-    await driver.wait(async () => (
-      await driver.findElement(By.css("#inventory-search-detail .detail-name")).getText()
-    ) === productSku, 10_000, "la búsqueda debe abrir el detalle del producto");
+    await driver.wait(
+      () => hasExactText(driver, "#inventory-search-detail .detail-name", productSku),
+      10_000,
+      "la búsqueda debe abrir el detalle del producto",
+    );
 
     await searchInput.clear();
     await searchInput.sendKeys(locationCode);
@@ -218,9 +227,11 @@ test("Tauri integra el recorrido normal, el historial y una alerta revisable", a
     resultGroup = await searchResults.findElement(By.css(".search-result-group"));
     assert.match(await resultGroup.findElement(By.css("h3")).getText(), /Ubicación/);
     await resultGroup.findElement(By.css(".search-result-button")).click();
-    await driver.wait(async () => (
-      await driver.findElement(By.css("#inventory-search-detail .detail-title")).getText()
-    ) === locationCode, 10_000, "la búsqueda debe abrir el detalle de la ubicación");
+    await driver.wait(
+      () => hasExactText(driver, "#inventory-search-detail .detail-title", locationCode),
+      10_000,
+      "la búsqueda debe abrir el detalle de la ubicación",
+    );
 
     await searchInput.clear();
     await searchInput.sendKeys(unitLabel);
