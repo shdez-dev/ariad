@@ -20,11 +20,15 @@ $resolvedTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP)
 $runId = [guid]::NewGuid().ToString("N")
 $testRoot = Join-Path $resolvedTemp "ariadna-ard-22-$runId"
 $installDirectory = Join-Path $testRoot "install"
-$windowsAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
-if ([string]::IsNullOrWhiteSpace($windowsAppData) -or -not (Test-Path -LiteralPath $windowsAppData -PathType Container)) {
-    throw "Windows no devolvió una carpeta ApplicationData válida para el runner."
+$dataDirectoryInput = $env:ARIADNA_TEST_APP_DATA_DIR
+if ([string]::IsNullOrWhiteSpace($dataDirectoryInput)) {
+    throw "ARIADNA_TEST_APP_DATA_DIR no está definido; no se puede aislar el perfil de la instalación."
 }
-$applicationDataDirectory = Join-Path $windowsAppData "com.ariadna.inventory"
+$applicationDataDirectory = [System.IO.Path]::GetFullPath($dataDirectoryInput)
+$runnerTempPrefix = $resolvedTemp.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $applicationDataDirectory.StartsWith($runnerTempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "ARIADNA_TEST_APP_DATA_DIR debe quedar dentro de RUNNER_TEMP para mantener aislada la prueba."
+}
 $databasePath = Join-Path $applicationDataDirectory "ariadna.sqlite3"
 $logPath = Join-Path $applicationDataDirectory "logs\ariadna.log"
 $appProcess = $null

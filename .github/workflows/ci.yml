@@ -139,11 +139,12 @@ jobs:
         env:
           ARIADNA_APP_BINARY: ${{ github.workspace }}/src-tauri/target/release/ariadna.exe
           ARIADNA_E2E_ARTIFACTS: ${{ runner.temp }}
-          APPDATA: ${{ runner.temp }}/ariadna-e2e/appdata
+          ARIADNA_TEST_APP_DATA_DIR: ${{ runner.temp }}/ariadna-e2e/appdata
         run: |
-          New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
+          $testDataDirectory = $env:ARIADNA_TEST_APP_DATA_DIR.Replace("'", "''")
+          $testCommand = "`$env:ARIADNA_TEST_APP_DATA_DIR = '$testDataDirectory'; npm test --prefix e2e-tests"
           icacls "$env:GITHUB_WORKSPACE" /grant "Everyone:(OI)(CI)F" | Out-Null
-          & $env:ARIADNA_GSUDO_BINARY --integrity Medium npm test --prefix e2e-tests
+          & $env:ARIADNA_GSUDO_BINARY --integrity Medium pwsh -NoProfile -Command $testCommand
           $testExitCode = $LASTEXITCODE
           if ($testExitCode -ne 0) {
             $diagnosticPath = Join-Path $env:ARIADNA_E2E_ARTIFACTS "ariadna-tauri-e2e-diagnostic.json"
@@ -160,6 +161,7 @@ jobs:
         shell: pwsh
         env:
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          ARIADNA_TEST_APP_DATA_DIR: ${{ runner.temp }}/ariadna-ard-22-profile
         run: |
           $installers = @(Get-ChildItem -Path "src-tauri/target/release/bundle/nsis" -Filter "*-setup.exe" -File)
           if ($installers.Count -ne 1) { throw "Se esperaba un solo instalador NSIS de Ariadna; se encontraron $($installers.Count)." }

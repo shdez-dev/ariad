@@ -51,6 +51,15 @@ fn log_shutdown_event(diagnostic_log: &DiagnosticLog) -> std::io::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    if let Some(data_directory) =
+        std::env::var_os("ARIADNA_TEST_APP_DATA_DIR").filter(|path| !path.is_empty())
+    {
+        context.config_mut().app.app_directories_override = Some(
+            tauri::utils::config::AppDirectoriesOverride::Root(data_directory.into()),
+        );
+    }
+
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             ipc::create_product,
@@ -113,7 +122,7 @@ pub fn run() {
             );
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("No se pudo configurar la ventana de Ariadna");
 
     app.run(|app_handle, event| {
