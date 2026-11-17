@@ -166,6 +166,23 @@ jobs:
           $installer = $installers[0]
           ./scripts/verify-windows-installer.ps1 -InstallerPath $installer.FullName -EvidencePath "$env:RUNNER_TEMP/ariadna-ard-22-verification.md"
 
+      - name: Publish NSIS verification evidence and failure detail
+        if: always()
+        shell: pwsh
+        run: |
+          $evidencePath = Join-Path $env:RUNNER_TEMP "ariadna-ard-22-verification.md"
+          if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "### Verificación NSIS`n`nNo se generó el documento de evidencia."
+            exit 0
+          }
+          $evidence = [System.IO.File]::ReadAllText($evidencePath).Trim()
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "### Verificación NSIS`n`n$evidence"
+          $failureMatch = [regex]::Match($evidence, '(?m)^Detalle del resultado: (.+)$')
+          if ($failureMatch.Success -and $failureMatch.Groups[1].Value -ne "Sin errores.") {
+            $detail = $failureMatch.Groups[1].Value.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A').Replace(':', '%3A').Replace(',', '%2C')
+            Write-Output "::error title=Verificación NSIS::$detail"
+          }
+
       - name: Upload Windows installer and verification evidence
         if: always()
         uses: actions/upload-artifact@v7
